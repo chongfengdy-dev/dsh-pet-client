@@ -1,0 +1,10 @@
+# 本机 systemd 部署配置（WSL 专用，不入库）
+dsh-web.service
+
+# 日志
+*.log
+dsh-client-debug.log
+
+# 构建产物
+*.exe
+nimcache/

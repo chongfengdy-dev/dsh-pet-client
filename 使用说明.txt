@@ -1,0 +1,55 @@
+# DeepSeek Harness 桌面客户端（DSH-Pet-Client）
+
+鲸鱼宠物桌宠版 DSH 客户端：托盘 + 悬浮鲸鱼宠物 + 嵌入 WebView2 窗口。
+
+## 一、快速开始（3 步）
+
+### 第 1 步：安装 Node.js
+- 官网下载 LTS 版：https://nodejs.org/zh-cn
+- 一路「下一步」安装完成（自带 npm）
+
+### 第 2 步：安装 dsh 并启动 web
+打开 PowerShell（开始菜单搜 PowerShell），运行：
+
+```powershell
+npm install -g @deepseek-ai/dsh
+dsh --profile web
+```
+
+看到类似 `dsh web: http://127.0.0.1:3080` 的输出即启动成功。
+**这个窗口不要关**（关了 web 就停了）。
+
+### 第 3 步：打开客户端
+双击本目录的 `dsh_client_full.exe`，等窗口出现即可使用。
+
+## 二、使用说明
+
+| 操作 | 效果 |
+|---|---|
+| 窗口标题栏 ✕ | 窗口会弹回（保护机制），退出请用托盘 |
+| 托盘图标 左键 | 显示 / 最小化 主窗口 |
+| 托盘图标 右键 | 菜单：打开 DSH / 重新加载 / 显示宠物 / 退出 |
+| 悬浮鲸鱼 左键 | 显示 / 最小化 主窗口 |
+| 悬浮鲸鱼 右键 | 同托盘菜单 |
+| 托盘「显示宠物」 | 显示悬浮鲸鱼（默认隐藏） |
+| 托盘「退出」 | 完全退出程序 |
+
+## 三、常见问题
+
+- **客户端白屏/连不上**：确认第 2 步的 PowerShell 窗口还开着（dsh web 在 3080 端口运行）
+- **窗口标题不是 DeepSeek Harness**：属正常，客户端每 5 秒自动修正
+- **提示缺少 WebView2**：Win10/11 一般自带；没有的话装 https://developer.microsoft.com/microsoft-edge/webview2/
+- **端口被占用**：可用 `dsh --profile web --port 8080` 换端口，但客户端默认连 3080，换端口后客户端需改源码重新编译
+
+## 四、目录说明
+
+```
+DSH-Pet-Client/
+├── dsh_client_full.exe    # 客户端主程序（绿色便携，双击即用）
+├── WebView2Loader.dll     # WebView2 加载器
+├── libgcc_s_seh-1.dll     # 运行库
+├── libssp-0.dll
+├── libstdc++-6.dll
+├── libwinpthread-1.dll
+└── assets/                # 图标/宠物素材
+```
