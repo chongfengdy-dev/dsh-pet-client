@@ -321,6 +321,32 @@ window.__ModuleLoader__.load({
 				sendResize(termState);
 			};
 			applyTermSettings();   // 初始背景
+			// 启动时从服务端恢复设置/几何（跨重启持久；首次/异常用默认）
+			// 服务端为权威（WebView2 localStorage 受缓存目录影响不可靠）
+			fetch("http://127.0.0.1:3081/api/term-state", { mode: "cors" })
+				.then((r) => r.json())
+				.then((st) => {
+					if (!st || !st.settings) return;
+					const s = st.settings;
+					if (typeof s.bg === "string") termSettings.bg = s.bg;
+					if (typeof s.alpha === "number") termSettings.alpha = s.alpha;
+					if (typeof s.fontSize === "number") termSettings.fontSize = s.fontSize;
+					if (typeof s.fontIdx === "number") termSettings.fontIdx = s.fontIdx;
+					if (typeof s.bgImage === "string") termSettings.bgImage = s.bgImage;
+					if (typeof s.bgImageAlpha === "number") termSettings.bgImageAlpha = s.bgImageAlpha;
+					if (st.geom && st.geom.w >= 320 && st.geom.h >= 200) {
+						const g = st.geom;
+						termPanel.root.style.width = g.w + "px";
+						termPanel.root.style.height = g.h + "px";
+						termPanel.root.style.right = "auto";
+						termPanel.root.style.left = g.x + "px";
+						termPanel.root.style.top = g.y + "px";
+						termPanel.root.style.transform = "";
+					}
+					syncImgUI();
+					applyTermSettings();
+				})
+				.catch(() => {});
 			alphaInput.addEventListener("input", () => {
 				termSettings.alpha = parseInt(alphaInput.value, 10);
 				alphaVal.textContent = String(termSettings.alpha) + "%";
@@ -558,6 +584,17 @@ window.__ModuleLoader__.load({
 		}
 		function saveTermSettings(s) {
 			try { localStorage.setItem(TERM_SETTINGS_KEY, JSON.stringify(s)); } catch (e) {}
+			// 服务端持久化（跨重启保留；WebView2 localStorage 受缓存目录影响不可靠）
+			try {
+				const el = document.getElementById(TERM_PANEL_ID);
+				const geom = el ? { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight } : null;
+				fetch("http://127.0.0.1:3081/api/term-state", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ settings: s, geom }),
+					mode: "cors",
+				}).catch(() => {});
+			} catch (e) {}
 		}
 		function hexToRgba(hex, alpha) {
 			const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
@@ -681,6 +718,18 @@ window.__ModuleLoader__.load({
 			if (w < 320 || h < 200) return;
 			try {
 				localStorage.setItem(PANEL_SIZE_KEY, JSON.stringify({ x, y, w, h }));
+			} catch (e) {}
+			// 服务端持久化（跨重启保留；几何变化时保存设置+几何）
+			try {
+				const raw = localStorage.getItem(TERM_SETTINGS_KEY);
+				let settings = null;
+				if (raw) { try { settings = JSON.parse(raw); } catch (e) {} }
+				fetch("http://127.0.0.1:3081/api/term-state", {
+					method: "POST",
+					headers: { "Content-Type": "application/json" },
+					body: JSON.stringify({ settings, geom: { x, y, w, h } }),
+					mode: "cors",
+				}).catch(() => {});
 			} catch (e) {}
 		}
 

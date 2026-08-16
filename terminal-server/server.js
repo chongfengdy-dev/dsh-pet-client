@@ -110,6 +110,26 @@ function writePetStateFile() {
     console.log('[term] pet-state file write failed:', e.message);
   }
 }
+// ---------- 终端状态持久化（设置/几何存服务端文件，跨重启保留） ----------
+// 背景：WebView2 缓存目录（webui 随机/固定问题）不可靠，主 2026-08-16 定稿——
+// 设置与面板几何存 WSL 服务端文件，插件启动读、改动写，彻底持久
+const TERM_STATE_FILE = path.join(__dirname, 'term-state.json');
+app.get('/api/term-state', (req, res) => {
+  try {
+    const data = fs.readFileSync(TERM_STATE_FILE, 'utf8');
+    res.json(JSON.parse(data));
+  } catch (e) {
+    res.json(null);   // 首次/异常 → 默认
+  }
+});
+app.post('/api/term-state', (req, res) => {
+  try {
+    fs.writeFileSync(TERM_STATE_FILE, JSON.stringify(req.body || {}), 'utf8');
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 app.get('/api/pet-state', (req, res) => res.json(petState));
 app.post('/api/pet-state', (req, res) => {
   const pet = req.body && req.body.pet;

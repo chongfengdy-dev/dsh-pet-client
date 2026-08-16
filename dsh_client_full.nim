@@ -319,7 +319,8 @@ var
   gFishPixels: array[3, array[FISH_BIN_W * FISH_BIN_H, uint32]]
   gFishPixelsLoaded = false
   gPetColor = 0             # 0=蓝 1=黑 2=橙（主循环低频轮询 3081 驱动）
-  gPetBlinkOn = true        # 橙色心跳闪烁相位（亮/灭交替）
+  gPetBaseColor = 0         # 基态色（非提问时颜色：最小化=蓝 0，打开=黑 1）——提问闪烁交替用
+  gPetBlinkOn = true        # 橙色心跳闪烁相位（橙/基态交替）
   gPetBlinkTick: int64 = 0  # 心跳计时
   gPetPollTick: int64 = 0   # 宠物状态轮询计时（自适应间隔）
   gPetPollOk = false        # 上次轮询是否成功（成功 1s / 失败 5s 间隔）
@@ -503,15 +504,17 @@ proc floatPaint(hwnd: HWND) =
   # 1. 全透明背景（zeroMem 快速清 0，替代逐像素循环）
   zeroMem(gDibBits, FLOAT_W * FLOAT_H * sizeof(uint32))
   # 2. 鲸鱼（over 合成，预乘；颜色按 gPetColor：0=蓝 1=黑 2=橙）
-  #    橙色且闪烁相位为"灭"时不画（心跳亮灭交替）
-  if gFishPixelsLoaded and not (gPetColor == 2 and not gPetBlinkOn):
+  #    提问闪烁（橙）时交替绘制"基态色"（最小化=蓝 / 打开=黑），
+  #    即蓝↔橙 或 黑↔橙 交替（主 2026-08-16 定稿，替代"橙/消失"）
+  if gFishPixelsLoaded:
+    let drawColor = if gPetColor == 2 and not gPetBlinkOn: gPetBaseColor else: gPetColor
     let fx = int(gFishX) - FISH_BIN_W div 2
     let fy = int(gFishY) - FISH_BIN_H div 2
     for wy in 0 ..< FISH_BIN_H:
       let ty = fy + wy
       if ty < 0 or ty >= FLOAT_H: continue
       for wx in 0 ..< FISH_BIN_W:
-        let src = gFishPixels[gPetColor][wy * FISH_BIN_W + wx]
+        let src = gFishPixels[drawColor][wy * FISH_BIN_W + wx]
         let sa = int((src shr 24) and 0xFF)
         if sa == 0: continue
         let tx = fx + wx
@@ -831,6 +834,8 @@ when isMainModule:
       let c = fetchPetState()
       gPetPollOk = c >= 0
       gAsking = c == 2
+    # 基态色（非提问时颜色：最小化=蓝 0 / 打开=黑 1）——提问闪烁与它交替
+    gPetBaseColor = if mainSeen and not gWindowMinimized: 1 else: 0
     var target = 0
     if gAsking:
       target = 2
