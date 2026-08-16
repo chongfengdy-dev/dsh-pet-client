@@ -1,9 +1,9 @@
 # DSH Nim 桌面客户端 (webui + winim 完整版)
-# 功能: 加载 3080 | 鲸鱼图标 | 托盘 | 悬浮图标 | 开机自启 | 尺寸记忆
+# 功能: 加载 3080 | 鲸鱼图标 | 托盘 | 悬浮图标 | 开机自启 | 尺寸记忆 | 三色宠物状态机
 import webui
+from webui/bindings import minimize
 import winim
 import winim/inc/shellapi
-from webui/bindings import minimize
 import strutils, os, math, random, net
 
 # winmm 高精度定时器（winim 未封装，手动声明；60fps 动画需要）
@@ -25,7 +25,6 @@ const
   # 托盘自定义消息
   WM_TRAYICON = WM_APP + 1
   ID_TRAY_OPEN = 1
-  ID_TRAY_RELOAD = 2
   ID_TRAY_EXIT = 3
   ID_TRAY_PET = 4          # 显示/隐藏宠物开关
 
@@ -41,34 +40,27 @@ var
   gLastRetryTime: int64     # 上次窗口重建尝试时间（限频，GetTickCount64 返回 int64）
   gLastTitleCheck: int64    # 上次标题强制检查时间
   gWindowMinimized = false  # 自己跟踪窗口状态，不依赖 IsIconic
-  gPetVisible = false       # 悬浮宠物显示状态（托盘开关控制；v10 默认隐藏，主偏好）
+  gPetVisible = true        # 悬浮宠物显示状态（2026-08-16 主定稿：默认打开；托盘开关控制）
   gFloatHwnd: HWND          # 悬浮宠物窗口句柄（托盘开关也要用）
 
 # ---------- 主窗口控制 ----------
 
-var gMainFoundHwnd: HWND    # EnumWindows 回调结果缓存
+var gMainFoundHwnd: HWND    # EnumWindows 回调结果缓存（标题命中 = 主窗口）
+var gMainCandidateHwnd: HWND  # 类名候选兜底（WebView* 首个命中，仅无标题命中时用）
 var gHostHwnd: HWND         # 托盘宿主窗口（宠物右键菜单 owner，菜单 WM_COMMAND 由托盘处理）
 
 proc enumMainWndProc(hwnd: HWND, lParam: LPARAM): WINBOOL {.stdcall.} =
-  ## EnumWindows 回调：找本进程的 webui 主窗口（类名 WebView* 开头，或标题含 DeepSeek Harness）
+  ## EnumWindows 回调：找本进程的 webui 主窗口。
+  ## 2026-08-16 改为「标题优先」：主窗口标题恒为 "DeepSeek Harness"（forceMainWindowTitle
+  ## 每 5 秒强制），终端窗口（第二 WebView2 窗口）页面标题是 "DSH Terminal"——
+  ## 终端窗口类名同为 WebView*，若类名优先会被误判为主窗口（标题强制/尺寸记忆/消失
+  ## 重建全作用到终端窗口上）。故类名 WebView* 只作候选兜底，标题命中才立即返回。
   ## 必须按进程过滤：浏览器等外部窗口标题可能与 dsh 页面相同（"DeepSeek Harness"），
   ## 不排除会误匹配（实测：点击托盘拉起浏览器）
   var wndPid: DWORD
   discard GetWindowThreadProcessId(hwnd, wndPid.addr)
   if wndPid != GetCurrentProcessId():
     return TRUE
-  var cls: array[64, WCHAR]
-  let cn = GetClassNameW(hwnd, cast[LPWSTR](cls.addr), 64)
-  if cn > 0:
-    const prefix = "WebView"
-    var match = cn >= 7
-    for i in 0 ..< 7:
-      if cls[i] != WCHAR(prefix[i]):
-        match = false
-        break
-    if match:
-      gMainFoundHwnd = hwnd
-      return FALSE
   var title: array[256, WCHAR]
   let tn = GetWindowTextW(hwnd, cast[LPWSTR](title.addr), 256)
   if tn > 0:
@@ -83,16 +75,31 @@ proc enumMainWndProc(hwnd: HWND, lParam: LPARAM): WINBOOL {.stdcall.} =
         if m:
           gMainFoundHwnd = hwnd
           return FALSE
+  var cls: array[64, WCHAR]
+  let cn = GetClassNameW(hwnd, cast[LPWSTR](cls.addr), 64)
+  if cn > 0:
+    const prefix = "WebView"
+    var match = cn >= 7
+    for i in 0 ..< 7:
+      if cls[i] != WCHAR(prefix[i]):
+        match = false
+        break
+    if match and gMainCandidateHwnd == 0:
+      gMainCandidateHwnd = hwnd
   return TRUE
 
 proc findMainWindow(): HWND =
-  ## 查找主窗口：EnumWindows 遍历（类名 WebView* 或标题含 DeepSeek Harness）
+  ## 查找主窗口：EnumWindows 遍历，标题含 "DeepSeek Harness" 优先命中，
+  ## 类名 WebView* 候选兜底（无标题命中时用；第二 WebView2 窗口不受影响）
   ## 比 FindWindow 可靠：webui 类名 A/W 注册差异 + 页面标题动态变化都会让
   ## FindWindow 精确匹配失配（实测 FindWindowW("WebViewWindow") 偶发失败）
   gMainFoundHwnd = 0
+  gMainCandidateHwnd = 0
   discard EnumWindows(enumMainWndProc, LPARAM(0))
   if gMainFoundHwnd != 0:
     return gMainFoundHwnd
+  if gMainCandidateHwnd != 0:
+    return gMainCandidateHwnd
   return FindWindowW(nil, "DeepSeek Harness".cstring)
 
 proc forceMainWindowTitle() =
@@ -164,8 +171,11 @@ proc showMainWindowIfMissing() =
 
 # ---------- 托盘 ----------
 
-proc loadWhaleIcon(size: int32): HICON =
-  let icoPath = getAppDir() & "\\assets\\fish_bw.ico"
+proc loadWhaleIcon(size: int32, color: int = 0): HICON =
+  ## 加载鲸鱼图标（0=蓝 1=黑 2=橙；用主提供的 deepseek-color-* 生成的三色 ico）
+  const icoFiles = ["assets\\fish_blue.ico", "assets\\fish_black.ico", "assets\\fish_orange.ico"]
+  let idx = if color >= 0 and color <= 2: color else: 0
+  let icoPath = getAppDir() & "\\" & icoFiles[idx]
   result = LoadImageW(0, icoPath.cstring, IMAGE_ICON, size, size,
                       LR_LOADFROMFILE).HICON
 
@@ -196,7 +206,6 @@ proc showTrayMenu(hwnd: HWND) =
     if n > 0: cast[LPCWSTR](buf.addr) else: nil
   var hMenu = CreatePopupMenu()
   discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, w("打开 DSH"))
-  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_RELOAD, w("重新加载"))
   if gPetVisible:
     discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_PET, w("隐藏宠物"))
   else:
@@ -226,9 +235,6 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
     case LOWORD(wParam)
     of ID_TRAY_OPEN:
       showMainWindowIfMissing()
-      result = 0
-    of ID_TRAY_RELOAD:
-      gWindow.navigate(WebUrl)
       result = 0
     of ID_TRAY_PET:
       # 显示/隐藏悬浮宠物（隐藏时停动画定时器省资源）
@@ -279,9 +285,12 @@ const
   FLOAT_W = FLOAT_AREA * 2 + FISH_DRAW   # 窗口宽 = 游动范围 + 鲸鱼尺寸
   FLOAT_H = FLOAT_AREA * 2 + FISH_DRAW
   MAX_BUBBLES = 12          # 最多泡泡数
-  FISH_BIN_W = FISH_DRAW    # 鲸鱼像素宽（fish_bw.bin）
+  FISH_BIN_W = FISH_DRAW    # 鲸鱼像素宽（fish_*.bin）
   FISH_BIN_H = FISH_DRAW    # 鲸鱼像素高
-  FISH_BIN_FILE = "assets\\fish_bw.bin"   # 蓝白不透明鲸鱼（BGRA 预乘，主提供 deepseek-color-1.png 制作）
+  # 三色鲸鱼（BGRA 预乘，主提供 deepseek-color-{blue,black,Orange}.png 制作，80x80）
+  FISH_BIN_BLUE = "assets\\fish_blue.bin"    # 终端收起（默认）
+  FISH_BIN_BLACK = "assets\\fish_black.bin"  # 终端打开
+  FISH_BIN_ORANGE = "assets\\fish_orange.bin" # 提问/要授权（心跳闪烁）
 
 type
   Bubble = object
@@ -306,24 +315,35 @@ var
   gBubbleTimer = 0          # 泡泡生成计时
   gBubbles: array[MAX_BUBBLES, Bubble]
   # ---- v7 像素级渲染（UpdateLayeredWindow，无品红） ----
-  gFishPixels: array[FISH_BIN_W * FISH_BIN_H, uint32]  # 鲸鱼 BGRA 预乘像素
+  # 三色鲸鱼像素：[0]=蓝（终端收起） [1]=黑（终端打开） [2]=橙（提问/授权）
+  gFishPixels: array[3, array[FISH_BIN_W * FISH_BIN_H, uint32]]
   gFishPixelsLoaded = false
+  gPetColor = 0             # 0=蓝 1=黑 2=橙（主循环低频轮询 3081 驱动）
+  gPetBlinkOn = true        # 橙色心跳闪烁相位（亮/灭交替）
+  gPetBlinkTick: int64 = 0  # 心跳计时
+  gPetPollTick: int64 = 0   # 宠物状态轮询计时（自适应间隔）
+  gPetPollOk = false        # 上次轮询是否成功（成功 1s / 失败 5s 间隔）
+  gAsking = false           # 是否正在提问/要授权（橙色心跳，来自状态文件）
   gDibBits: ptr UncheckedArray[uint32]   # DIB 像素（96x96 BGRA 预乘）
   gMemDC: HDC
 
-proc floatLoadFishBin() =
-  ## 从 assets\fish_bw.bin 加载鲸鱼像素（48x48，BGRA 预乘，小端）
-  let path = getAppDir() & "\\" & FISH_BIN_FILE
-  var f: File
-  if open(f, path):
-    var raw: array[FISH_BIN_W * FISH_BIN_H * 4, uint8]
-    let n = readBuffer(f, raw.addr, raw.len)
-    if n == raw.len:
-      copyMem(gFishPixels.addr, raw.addr, raw.len)  # BGRA 字节序 == uint32 小端
-      gFishPixelsLoaded = true
-    close(f)
-  if not gFishPixelsLoaded:
-    echo "[DSH-Nim] 警告: 鲸鱼像素加载失败 (", path, ")"
+proc floatLoadFishBins() =
+  ## 加载三色鲸鱼像素（0=蓝 1=黑 2=橙；BGRA 预乘，小端）
+  const files = [FISH_BIN_BLUE, FISH_BIN_BLACK, FISH_BIN_ORANGE]
+  var anyLoaded = false
+  for i in 0 ..< 3:
+    let path = getAppDir() & "\\" & files[i]
+    var f: File
+    if open(f, path):
+      var raw: array[FISH_BIN_W * FISH_BIN_H * 4, uint8]
+      let n = readBuffer(f, raw.addr, raw.len)
+      if n == raw.len:
+        copyMem(gFishPixels[i].addr, raw.addr, raw.len)  # BGRA 字节序 == uint32 小端
+        anyLoaded = true
+      close(f)
+  gFishPixelsLoaded = anyLoaded
+  if not anyLoaded:
+    echo "[DSH-Nim] 警告: 鲸鱼像素加载失败（三色 bin 均缺失）"
 
 proc floatInitDib() =
   ## 创建 32bpp DIB（自顶向下）+ 内存 DC，供 UpdateLayeredWindow 像素渲染
@@ -482,15 +502,16 @@ proc floatPaint(hwnd: HWND) =
   if gDibBits == nil: return
   # 1. 全透明背景（zeroMem 快速清 0，替代逐像素循环）
   zeroMem(gDibBits, FLOAT_W * FLOAT_H * sizeof(uint32))
-  # 2. 蓝白鲸鱼（over 合成，预乘）
-  if gFishPixelsLoaded:
+  # 2. 鲸鱼（over 合成，预乘；颜色按 gPetColor：0=蓝 1=黑 2=橙）
+  #    橙色且闪烁相位为"灭"时不画（心跳亮灭交替）
+  if gFishPixelsLoaded and not (gPetColor == 2 and not gPetBlinkOn):
     let fx = int(gFishX) - FISH_BIN_W div 2
     let fy = int(gFishY) - FISH_BIN_H div 2
     for wy in 0 ..< FISH_BIN_H:
       let ty = fy + wy
       if ty < 0 or ty >= FLOAT_H: continue
       for wx in 0 ..< FISH_BIN_W:
-        let src = gFishPixels[wy * FISH_BIN_W + wx]
+        let src = gFishPixels[gPetColor][wy * FISH_BIN_W + wx]
         let sa = int((src shr 24) and 0xFF)
         if sa == 0: continue
         let tx = fx + wx
@@ -572,8 +593,8 @@ proc floatInit() =
     # v7: 像素级渲染（UpdateLayeredWindow），不再用品红色键
     floatInitDib()
     dbg("floatInitDib bits=" & $(gDibBits != nil))
-    floatLoadFishBin()
-    dbg("floatLoadFishBin loaded=" & $gFishPixelsLoaded)
+    floatLoadFishBins()
+    dbg("floatLoadFishBins loaded=" & $gFishPixelsLoaded)
     # 初始化位置：屏幕右上角
     let sw = GetSystemMetrics(SM_CXSCREEN)
     discard SetWindowPos(gFloatHwnd, HWND_TOPMOST,
@@ -583,13 +604,13 @@ proc floatInit() =
     gFishX = FLOAT_W / 2.0
     gFishY = FLOAT_H / 2.0
     if gPetVisible:
-      # 显示宠物（默认隐藏，托盘开关可开启）
+      # 显示宠物（2026-08-16 主定稿：默认打开，托盘可隐藏）
       discard SetTimer(gFloatHwnd, 1, FLOAT_ANIM_MS, nil)
       discard ShowWindow(gFloatHwnd, SW_SHOWNOACTIVATE)
       # 首次渲染（窗口显示后 UpdateLayeredWindow 才生效）
       floatPaint(gFloatHwnd)
     else:
-      # 默认隐藏：不启动动画定时器，节省资源
+      # 隐藏状态：不启动动画定时器，节省资源
       discard ShowWindow(gFloatHwnd, SW_HIDE)
     dbg("floatPaint done")
     echo "[DSH-Nim] 悬浮图标已就绪 (v7 像素渲染)"
@@ -663,6 +684,21 @@ proc backendAlive(): bool =
     return true
   except CatchableError:
     return false
+
+proc fetchPetState(): int =
+  ## 读 Windows 侧本地状态文件（终端服务写入），返回 0=蓝 1=黑 2=橙。
+  ## 2026-08-16 崩溃修复：原 HTTP 轮询（net 模块 send/recv）在 Windows 触发
+  ## 0xc0000005 访问冲突导致进程崩溃；改为读本地文件（纯文件 I/O，零网络）。
+  ## 路径动态化（2026-08-16 主定稿）：%USERPROFILE%\\pet-state.json——
+  ## 服务端写 Windows 用户目录根，不再硬编码用户名，换机可部署。
+  try:
+    let body = readFile(getEnv("USERPROFILE") & "\\pet-state.json")
+    if body.contains("\"pet\":\"blue\""): return 0
+    if body.contains("\"pet\":\"black\""): return 1
+    if body.contains("\"pet\":\"orange\""): return 2
+    return -1
+  except CatchableError:
+    return -1
 
 # ---------- 主流程 ----------
 
@@ -784,5 +820,36 @@ when isMainModule:
       gWindow.setSize(gLastW, gLastH)
       discard gWindow.showWv(WebUrl)
       gBackendDown = false
+
+    # ---- 宠物颜色：提问(橙,文件) > 主窗口打开(黑) > 主窗口最小化/未现(蓝) ----
+    # 2026-08-16 主定稿：颜色跟随客户端主窗口状态（打开=黑、最小化=蓝），
+    # 终端面板开关不再影响颜色；提问橙色由状态文件驱动（客户端本地零网络）
+    let petTick = GetTickCount64()
+    let pollGap = if gPetPollOk: 1000 else: 5000   # 失败拉长间隔，少打扰主循环
+    if petTick - gPetPollTick > pollGap:
+      gPetPollTick = petTick
+      let c = fetchPetState()
+      gPetPollOk = c >= 0
+      gAsking = c == 2
+    var target = 0
+    if gAsking:
+      target = 2
+    elif mainSeen and not gWindowMinimized:
+      target = 1
+    if target != gPetColor:
+      gPetColor = target
+      gPetBlinkOn = true
+      floatPaint(gFloatHwnd)
+      # 托盘图标跟随宠物颜色（蓝/黑/橙同色 ico）
+      let tIcon = loadWhaleIcon(32, gPetColor)
+      if tIcon != 0:
+        gTrayData.hIcon = tIcon
+        discard Shell_NotifyIconW(NIM_MODIFY, gTrayData.addr)
+      dbg("pet color -> " & $target)
+    if gPetColor == 2:
+      if petTick - gPetBlinkTick >= 400:
+        gPetBlinkTick = petTick
+        gPetBlinkOn = not gPetBlinkOn
+        floatPaint(gFloatHwnd)
 
     sleep(FLOAT_ANIM_MS)

@@ -1,0 +1,17 @@
+[Unit]
+Description=DSH Terminal Server (port 3081, for DSH-Pet-Client)
+# WSL systemd 服务：终端服务随 WSL 启动自动拉起（无需手动启动）。
+# 部署前请把 <USER> 替换为你 WSL 的实际用户名，<PKG_DIR> 替换为 dsh-term-panels
+# 仓库目录在 WSL 中的实际路径（模板，不含个人信息）。
+After=network.target
+
+[Service]
+Type=simple
+User=<USER>
+WorkingDirectory=<PKG_DIR>/terminal-server
+ExecStart=/usr/bin/node <PKG_DIR>/terminal-server/server.js
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

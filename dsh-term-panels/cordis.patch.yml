@@ -1,0 +1,5 @@
+# dsh-term-panels: 作为 cordis loader entry 注册（服务端无逻辑，纯前端插件）。
+- insert:
+    - id: term-panels
+      name: dsh-term-panels
+      config: {}

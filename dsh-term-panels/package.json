@@ -1,0 +1,25 @@
+{
+  "name": "dsh-term-panels",
+  "version": "2.0.0",
+  "private": true,
+  "description": "DSH web 前端插件：右侧悬浮按钮、内嵌 xterm 终端面板（直连 3081 终端服务）、Token HUD、宠物状态联动",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./client": {
+      "default": "./lib/client.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "inject": []
+    }
+  }
+}

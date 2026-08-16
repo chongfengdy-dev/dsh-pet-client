@@ -8,3 +8,11 @@ dsh-client-debug.log
 # 构建产物
 *.exe
 nimcache/
+
+# 依赖与数据
+node_modules/
+*.zstd
+pet-state.json
+
+# 本地环境
+.dsh/
