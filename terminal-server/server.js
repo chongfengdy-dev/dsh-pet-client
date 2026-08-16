@@ -54,7 +54,33 @@ app.use('/api', (req, res, next) => {
   if (req.method === 'OPTIONS') return res.sendStatus(204);
   next();
 });
-app.use(express.json({ limit: '64kb' }));
+app.use(express.json({ limit: '20mb' }));   // 20MB：宠物状态小请求 + 图片 base64 上传
+
+// ---------- 终端图片背景（上传 + 静态托管） ----------
+// 插件设置面板选图 → POST base64 → 存 backgrounds/ → termHost 背景引用
+const BG_DIR = path.join(__dirname, 'backgrounds');
+fs.mkdirSync(BG_DIR, { recursive: true });
+app.use('/backgrounds', express.static(BG_DIR, {
+  setHeaders: (res) => {
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+  },
+}));
+app.post('/api/background', (req, res) => {
+  const { data, ext } = req.body || {};
+  if (!data || !ext) return res.status(400).json({ error: 'missing data/ext' });
+  const allowed = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'];
+  if (!allowed.includes(String(ext).toLowerCase())) {
+    return res.status(400).json({ error: 'unsupported type' });
+  }
+  const buf = Buffer.from(String(data), 'base64');
+  if (buf.length === 0 || buf.length > 15 * 1024 * 1024) {
+    return res.status(400).json({ error: 'invalid or too large' });
+  }
+  const file = 'bg.' + String(ext).toLowerCase();
+  fs.writeFileSync(path.join(BG_DIR, file), buf);
+  console.log(`[term] background updated: ${file} (${buf.length} bytes)`);
+  res.json({ url: '/backgrounds/' + file });
+});
 
 // ---------- 宠物状态（dsh web 插件 → 客户端 Nim） ----------
 // pet: 'blue'（终端收起，默认）| 'black'（终端打开）| 'orange'（提问/授权，心跳闪烁）

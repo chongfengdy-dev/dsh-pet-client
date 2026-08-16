@@ -34,6 +34,7 @@ window.__ModuleLoader__.load({
 		];
 
 		function apply(ctx) {
+			const connection = ctx.connection;
 			if (document.getElementById(DOCK_ID)) return; // 已注入
 
 			// ---------- 右侧悬浮按钮块（终端） ----------
@@ -198,15 +199,120 @@ window.__ModuleLoader__.load({
 			});
 			fontSel.value = String(termSettings.fontIdx);
 			fontRow.appendChild(fontSel);
+			// 背景图片（选择/清除）
+			const imgRow = sRow("图片");
+			const imgPickBtn = document.createElement("button");
+			Object.assign(imgPickBtn.style, {
+				flex: "1", cursor: "pointer", border: "1px solid var(--dsw-alias-border-l2)",
+				background: "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))",
+				color: "var(--dsw-alias-label-primary)", borderRadius: "5px", padding: "3px 8px",
+			});
+			imgPickBtn.textContent = termSettings.bgImage ? "更换图片" : "选择图片";
+			const imgClearBtn = document.createElement("button");
+			Object.assign(imgClearBtn.style, {
+				flex: "1", cursor: "pointer", border: "1px solid var(--dsw-alias-border-l2)",
+				background: "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))",
+				color: "var(--dsw-alias-label-primary)", borderRadius: "5px", padding: "3px 8px",
+			});
+			imgClearBtn.textContent = "清除图片";
+			const bgFileInput = document.createElement("input");
+			bgFileInput.type = "file";
+			bgFileInput.accept = "image/*";
+			bgFileInput.style.display = "none";
+			imgRow.appendChild(imgPickBtn);
+			imgRow.appendChild(imgClearBtn);
+			// 图片透明度（有图片时可用）
+			const imgAlphaRow = sRow("图透明度");
+			const imgAlphaInput = document.createElement("input");
+			imgAlphaInput.type = "range";
+			imgAlphaInput.min = "0";
+			imgAlphaInput.max = "100";
+			imgAlphaInput.step = "5";
+			imgAlphaInput.value = String(termSettings.bgImageAlpha);
+			const imgAlphaVal = document.createElement("span");
+			imgAlphaVal.style.fontFamily = 'Consolas, monospace';
+			imgAlphaVal.textContent = String(termSettings.bgImageAlpha) + "%";
+			imgAlphaRow.appendChild(imgAlphaInput);
+			imgAlphaRow.appendChild(imgAlphaVal);
+			const syncImgUI = () => {
+				imgPickBtn.textContent = termSettings.bgImage ? "更换图片" : "选择图片";
+				const has = !!termSettings.bgImage;
+				imgAlphaInput.disabled = !has;
+				imgAlphaVal.style.opacity = has ? 1 : .4;
+			};
+			syncImgUI();
+			imgPickBtn.addEventListener("click", (e) => { e.stopPropagation(); bgFileInput.click(); });
+			imgClearBtn.addEventListener("click", (e) => {
+				e.stopPropagation();
+				termSettings.bgImage = "";
+				syncImgUI();
+				applyTermSettings();
+			});
+			bgFileInput.addEventListener("change", (e) => {
+				e.stopPropagation();
+				const file = bgFileInput.files[0];
+				if (!file) return;
+				const reader = new FileReader();
+				reader.onload = () => {
+					const b64 = String(reader.result).split(",")[1];
+					const ext = (file.name.split(".").pop() || "png").toLowerCase();
+					fetch("http://127.0.0.1:3081/api/background", {
+						method: "POST",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ data: b64, ext }),
+						mode: "cors",
+					})
+						.then((r) => r.json())
+						.then((j) => {
+							if (j.url) {
+								// 绝对 URL：相对路径会从 3080 加载导致 404（图片不显示）
+								termSettings.bgImage = "http://127.0.0.1:3081" + j.url;
+								syncImgUI();
+								applyTermSettings();
+							}
+						})
+						.catch(() => {});
+				};
+				reader.readAsDataURL(file);
+			});
+			imgAlphaInput.addEventListener("input", () => {
+				termSettings.bgImageAlpha = parseInt(imgAlphaInput.value, 10);
+				imgAlphaVal.textContent = String(termSettings.bgImageAlpha) + "%";
+				applyTermSettings();
+			});
 			termSettingsPanel.appendChild(bgRow);
 			termSettingsPanel.appendChild(alphaRow);
+			termSettingsPanel.appendChild(imgRow);
+			termSettingsPanel.appendChild(imgAlphaRow);
 			termSettingsPanel.appendChild(sizeRow);
 			termSettingsPanel.appendChild(fontRow);
 			document.body.appendChild(termSettingsPanel);
-			// 应用设置：termHost 背景 = 自定义色×透明度（xterm 背景透明）
+			// 图片背景层（termHost 内绝对定位，xterm 文字在其上方不透明）
+			let bgImgLayer = null;
+			const updateBgImage = () => {
+				if (termSettings.bgImage) {
+					if (!bgImgLayer) {
+						bgImgLayer = document.createElement("div");
+						Object.assign(bgImgLayer.style, {
+							position: "absolute", inset: "0", zIndex: "0",
+							backgroundSize: "cover", backgroundPosition: "center",
+							backgroundRepeat: "no-repeat", pointerEvents: "none",
+						});
+						termHost.appendChild(bgImgLayer);
+					}
+					bgImgLayer.style.backgroundImage =
+						"url(" + termSettings.bgImage + "?t=" + Date.now() + ")";
+					bgImgLayer.style.opacity = String(termSettings.bgImageAlpha / 100);
+				} else if (bgImgLayer) {
+					bgImgLayer.remove();
+					bgImgLayer = null;
+				}
+			};
+			// 应用设置：termHost 背景 = 自定义色×透明度 + 图片层（可选，xterm 背景透明）
 			const applyTermSettings = () => {
 				saveTermSettings(termSettings);
 				termHost.style.background = hexToRgba(termSettings.bg, termSettings.alpha / 100);
+				updateBgImage();
 				if (!termState.term) return;
 				termState.term.options.fontSize = termSettings.fontSize;
 				termState.term.options.fontFamily = TERM_FONTS[termSettings.fontIdx].value;
@@ -436,7 +542,7 @@ window.__ModuleLoader__.load({
 		// ---------- 终端设置存取（字号/字体，localStorage） ----------
 		function loadTermSettings() {
 			// 默认设置（主 2026-08-16 定稿：深色 #0d1117、透明度 60%、字号 16、Consolas）
-			let s = { bg: "#0d1117", alpha: 60, fontSize: 16, fontIdx: 0 };
+			let s = { bg: "#0d1117", alpha: 60, fontSize: 16, fontIdx: 0, bgImage: "", bgImageAlpha: 100 };
 			try {
 				const raw = JSON.parse(localStorage.getItem(TERM_SETTINGS_KEY) || "null");
 				if (raw) {
@@ -444,6 +550,8 @@ window.__ModuleLoader__.load({
 					if (typeof raw.alpha === "number") s.alpha = raw.alpha;
 					if (typeof raw.fontSize === "number") s.fontSize = raw.fontSize;
 					if (typeof raw.fontIdx === "number") s.fontIdx = raw.fontIdx;
+					if (typeof raw.bgImage === "string") s.bgImage = raw.bgImage;
+					if (typeof raw.bgImageAlpha === "number") s.bgImageAlpha = raw.bgImageAlpha;
 				}
 			} catch (e) {}
 			return s;
@@ -465,7 +573,7 @@ window.__ModuleLoader__.load({
 				"#dsh-term-host .xterm, #dsh-term-host .xterm-screen, " +
 				"#dsh-term-host .xterm-viewport, #dsh-term-host .xterm-scrollable-element, " +
 				"#dsh-term-host .xterm-rows { background: transparent !important; }" +
-				"#dsh-term-host .xterm { height: 100%; }" +
+				"#dsh-term-host .xterm { height: 100%; position: relative; z-index: 1; }" +
 				"#dsh-term-host .xterm .xterm-viewport { overflow-y: auto; }" +
 				"#dsh-term-host .xterm ::-webkit-scrollbar { display: none !important; width: 0 !important; }";
 			document.head.appendChild(st);
@@ -683,7 +791,7 @@ window.__ModuleLoader__.load({
 		}
 
 		exports.apply = apply;
-		exports.inject = [];
+		exports.inject = ["connection"];
 		return module.exports;
 	}
 });
