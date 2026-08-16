@@ -1,7 +1,7 @@
 # DSH Nim 桌面客户端 (webui + winim 完整版)
 # 功能: 加载 3080 | 鲸鱼图标 | 托盘 | 悬浮图标 | 开机自启 | 尺寸记忆 | 三色宠物状态机
 import webui
-from webui/bindings import minimize
+from webui/bindings import minimize, set_close_handler_wv
 import winim
 import winim/inc/shellapi
 import strutils, os, math, random, net
@@ -169,6 +169,18 @@ proc showMainWindowIfMissing() =
     gWindow.setSize(gLastW, gLastH)
     discard gWindow.showWv(WebUrl)
 
+proc onWebuiClose(window: csize_t): bool {.cdecl.} =
+  ## 点 ✕（或 Alt+F4）→ 最小化而不是关闭；退出只走托盘"退出"
+  ## 2026-08-16 主定稿：webui 官方 close handler（webui_set_close_handler_wv，
+  ## 回调在 webui 自己的窗口过程里被调用，不替换 WndProc、不碰窗口初始化）。
+  ## 返回 false = 吞掉 WM_CLOSE，窗口不销毁 → 不触发主循环 ~3s 自动重建，
+  ## 也绕开重建时 showWv 内部停旧 WebView 线程的最长 2.5s 同步等待（点✕卡顿根因）。
+  gWindowMinimized = true
+  let wnd = findMainWindow()
+  if wnd != 0:
+    discard ShowWindow(wnd, SW_MINIMIZE)
+  result = false
+
 # ---------- 托盘 ----------
 
 proc loadWhaleIcon(size: int32, color: int = 0): HICON =
@@ -327,6 +339,31 @@ var
   gAsking = false           # 是否正在提问/要授权（橙色心跳，来自状态文件）
   gDibBits: ptr UncheckedArray[uint32]   # DIB 像素（96x96 BGRA 预乘）
   gMemDC: HDC
+
+proc applyPetIconColor() =
+  ## 托盘 + 任务栏图标同步为当前显示色（蓝0/黑1/橙2），并释放旧句柄防泄漏。
+  ## 2026-08-16 主验收要求：托盘/任务栏图标与悬浮宠物同色且同相位交替闪烁——
+  ## 显示色相位与 floatPaint 完全一致：提问中(gPetColor==2)且闪烁相位 OFF 时
+  ## 显示基态色(gPetBaseColor)，否则显示 gPetColor。每 400ms 由主循环闪烁分支调用。
+  let dispColor = if gPetColor == 2 and not gPetBlinkOn: gPetBaseColor else: gPetColor
+  # 托盘（NIM_MODIFY 后 Shell 内部复制图标，旧句柄可安全 DestroyIcon）
+  let tIcon = loadWhaleIcon(32, dispColor)
+  if tIcon != 0:
+    let oldT = gTrayData.hIcon
+    gTrayData.hIcon = tIcon
+    discard Shell_NotifyIconW(NIM_MODIFY, gTrayData.addr)
+    if oldT != 0: discard DestroyIcon(oldT)
+  # 任务栏（ICON_SMALL=任务栏按钮，ICON_BIG=Alt+Tab 缩略图）
+  let mw = findMainWindow()
+  if mw != 0:
+    let bigIcon = loadWhaleIcon(32, dispColor)
+    let smallIcon = loadWhaleIcon(16, dispColor)
+    if bigIcon != 0:
+      let oldBig = SendMessageW(mw, WM_SETICON, ICON_BIG, LPARAM(bigIcon))
+      if oldBig != 0: discard DestroyIcon(HICON(oldBig))
+    if smallIcon != 0:
+      let oldSmall = SendMessageW(mw, WM_SETICON, ICON_SMALL, LPARAM(smallIcon))
+      if oldSmall != 0: discard DestroyIcon(HICON(oldSmall))
 
 proc floatLoadFishBins() =
   ## 加载三色鲸鱼像素（0=蓝 1=黑 2=橙；BGRA 预乘，小端）
@@ -736,6 +773,10 @@ when isMainModule:
   let shown = gWindow.showWv(WebUrl)
   dbg("after showWv shown=" & $shown)
 
+  # 点 ✕ = 最小化（webui 官方 close handler，退出只走托盘"退出"）
+  set_close_handler_wv(csize_t(gWindow), onWebuiClose)
+  dbg("close handler registered")
+
   # 悬浮鲸鱼图标（主窗口创建后再初始化，避免影响 webui 窗口）
   dbg("before floatInit")
   floatInit()
@@ -845,16 +886,15 @@ when isMainModule:
       gPetColor = target
       gPetBlinkOn = true
       floatPaint(gFloatHwnd)
-      # 托盘图标跟随宠物颜色（蓝/黑/橙同色 ico）
-      let tIcon = loadWhaleIcon(32, gPetColor)
-      if tIcon != 0:
-        gTrayData.hIcon = tIcon
-        discard Shell_NotifyIconW(NIM_MODIFY, gTrayData.addr)
+      # 托盘 + 任务栏图标跟随宠物颜色（蓝/黑/橙同色；含旧句柄释放）
+      applyPetIconColor()
       dbg("pet color -> " & $target)
     if gPetColor == 2:
       if petTick - gPetBlinkTick >= 400:
         gPetBlinkTick = petTick
         gPetBlinkOn = not gPetBlinkOn
         floatPaint(gFloatHwnd)
+        # 托盘/任务栏与宠物同相位交替闪烁（橙 ↔ 基态色）
+        applyPetIconColor()
 
     sleep(FLOAT_ANIM_MS)
