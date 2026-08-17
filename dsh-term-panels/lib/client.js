@@ -848,10 +848,9 @@ window.__ModuleLoader__.load({
 			Object.assign(hint.style, {
 				position: "fixed", zIndex: "99999",
 				padding: "6px 14px", borderRadius: "10px",
-				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 35%, transparent)",
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 50%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
 				boxShadow: "0 4px 16px rgba(0,0,0,.22)",
-				backdropFilter: "blur(8px)",
 				color: "var(--dsw-alias-label-primary)",
 				fontFamily: 'system-ui, "Segoe UI", sans-serif',
 				fontSize: "16px", fontWeight: "400",
