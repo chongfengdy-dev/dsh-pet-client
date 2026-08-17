@@ -1047,23 +1047,29 @@ window.__ModuleLoader__.load({
 
 			// 事件驱动：订阅回调 → 读快照 → 与已记录对比，只 append 更新的消息。
 			// 锚点 = 已记录条数；快照 user 消息数更多 → 尾部新增（新消息总是 append 在尾部）。
+			// 无论有无新增都重建索引（持久化记录可能比 compaction 后快照多，提前 return 会漏建索引）。
 			function onSessionEvent() {
 				if (!binding || !binding.session) return;
 				let snapList = [];
 				try {
 					snapList = collectUserMessages(binding.session.getSnapshot());
 				} catch (e) { return; }
-				if (snapList.length <= userMsgs.length) return; // 无新增（或 compaction 变少，不删记录）
-				// 从已记录位置起 append 新增
-				for (let i = userMsgs.length; i < snapList.length; i++) {
-					appendRow(snapList[i]);
+				if (snapList.length > userMsgs.length) {
+					// 从已记录位置起 append 新增
+					for (let i = userMsgs.length; i < snapList.length; i++) {
+						appendRow(snapList[i]);
+					}
 				}
 				rebuildRowMap();
 			}
 
-			// 文本 → DOM user 行号索引：数据变化时重建一次（点击时 O(1) 查表，不遍历）
+			// 文本 → DOM user 行号索引：数据/DOM 变化时重建（点击时 O(1) 查表，不遍历）
 			let rowMap = {};
 			let cachedEls = [];
+			let rowObserver = null;
+			let pendingTarget = null;   // 懒加载定位目标：点击后等待"加载更早"把目标加载进 DOM
+			let lastLoadClick = 0;      // 触发"加载更早"节流
+			let pendingTimer = null;    // 定位超时保护
 			function rebuildRowMap() {
 				rowMap = {};
 				const root = findChatRoot();
@@ -1073,7 +1079,51 @@ window.__ModuleLoader__.load({
 					const t = (e.textContent || "").trim().split("\n", 1)[0] || "";
 					if (t) rowMap[t] = i;
 				});
+				// 懒加载定位：目标刚被加载出来 → 立即定位
+				if (pendingTarget && rowMap[pendingTarget] !== undefined) {
+					const el = cachedEls[rowMap[pendingTarget]];
+					pendingTarget = null;
+					clearTimeout(pendingTimer);
+					if (el) jumpTo(el);
+					return;
+				}
+				// 目标还没出现 → 继续触发"加载更早"（有更早按钮且非加载中）
+				if (pendingTarget) maybeLoadOlder();
 			}
+			// 触发对话区"加载更早"（懒加载历史）：优先走官方 binding.session.loadOlder()
+			// 编程式分页加载（dsh 官方 ChatView 按钮同机制），节流防止连点。
+			function maybeLoadOlder() {
+				if (binding && binding.session && typeof binding.session.loadOlder === "function") {
+					const now = Date.now();
+					if (now - lastLoadClick < 600) return;
+					lastLoadClick = now;
+					try { binding.session.loadOlder().catch(() => {}); } catch (e) {}
+					return;
+				}
+				// 兜底：模拟点击"加载更早"按钮
+				const root = findChatRoot();
+				if (!root) return;
+				const btn = root.querySelector('button[type="button"]');
+				if (!btn || btn.disabled) return;
+				const label = (btn.textContent || "").trim();
+				if (label !== "加载更早" && label !== "Load earlier") return;
+				const now = Date.now();
+				if (now - lastLoadClick < 600) return;
+				lastLoadClick = now;
+				btn.click();
+			}
+			// 监听对话区 DOM 变化（新消息渲染 / 点击"加载更早"加载历史 / compaction 重建），
+			// 变化即重建索引（防抖），保证横杠点击总能找到最新行号。
+			function ensureRowObserver() {
+				const root = findChatRoot();
+				if (!root || rowObserver) return;
+				rowObserver = new MutationObserver(() => {
+					clearTimeout(rebuildTimer);
+					rebuildTimer = setTimeout(rebuildRowMap, 150);
+				});
+				rowObserver.observe(root, { childList: true, subtree: true });
+			}
+			let rebuildTimer = null;
 
 			function collectUserMessages(snap) {
 				const out = [];
@@ -1253,11 +1303,21 @@ window.__ModuleLoader__.load({
 				const text = userMsgs[userIndex];
 				if (!text) return;
 				// 索引查表定位（数据变化时已重建 rowMap）：O(1) 取 DOM 行号，不遍历。
-				// 匹配不到 = 消息已被 compaction 清出对话区，物理上无法定位，不跳转。
 				const row = rowMap[text];
-				const el = row === undefined ? undefined : cachedEls[row];
+				if (row !== undefined && cachedEls[row]) { jumpTo(cachedEls[row]); return; }
+				// 目标不在 DOM（对话区懒加载，"加载更早"的历史还没加载）：
+				// 设 pendingTarget，触发"加载更早"循环直到目标出现（rebuildRowMap 里续推）
+				pendingTarget = text;
+				clearTimeout(pendingTimer);
+				pendingTimer = setTimeout(() => { pendingTarget = null; }, 15000); // 15s 超时放弃
+				maybeLoadOlder();
+			}
+
+			// 滚动到目标消息行（瞬间定位 + 黄色闪烁）
+			function jumpTo(el) {
 				if (!el) return;
-				const container = findScrollContainer(findChatRoot());
+				const root = findChatRoot();
+				const container = root ? findScrollContainer(root) : null;
 				if (container) {
 					const cr = container.getBoundingClientRect();
 					const tr = el.getBoundingClientRect();
@@ -1275,6 +1335,8 @@ window.__ModuleLoader__.load({
 			}
 			rebind();
 			placeOutline();
+			ensureRowObserver();
+			rebuildRowMap();
 			window.addEventListener("resize", placeOutline);
 
 			// ---- 定位高亮动画样式 ----
