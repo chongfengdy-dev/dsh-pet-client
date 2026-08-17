@@ -1067,6 +1067,9 @@ window.__ModuleLoader__.load({
 			}
 
 			// 文本 → DOM user 行号索引：数据/DOM 变化时重建（点击时 O(1) 查表，不遍历）
+			// 键 = 快照节点提取的文本（与记录同源，必然相等）；值 = 按顺序对齐 DOM 行号
+			// （快照 user 节点顺序 = 对话区 DOM user 行顺序，都是已加载消息的时间序）。
+			// 数量不一致时（渲染差异）退化为 DOM 行 textContent 匹配兜底。
 			let rowMap = {};
 			let cachedEls = [];
 			let rowObserver = null;
@@ -1078,14 +1081,28 @@ window.__ModuleLoader__.load({
 				const root = findChatRoot();
 				if (!root) return;
 				cachedEls = Array.from(root.querySelectorAll('[data-chat-flow-kind="user"]'));
-				cachedEls.forEach((e, i) => {
-					const full = (e.textContent || "").trim();
-					const first = full.split("\n", 1)[0] || "";
-					// 主键：首行完全相等
-					if (first) rowMap[first] = i;
-					// 次键：完整文本也建（长消息截断时首行可能被渲染截断）
-					if (full && full.length > first.length && full.length <= 200) rowMap[full] = i;
-				});
+				// 快照 user 节点文本（与记录同源）
+				let snapTexts = [];
+				try {
+					const snap = binding.session.getSnapshot();
+					const nodes = (snap && snap.nodes) || [];
+					snapTexts = nodes
+						.filter((n) => n && (n.kind === "user" || n.kind === "steering"))
+						.map(nodeTextOf)
+						.filter((t) => !!t);
+				} catch (e) {}
+				if (snapTexts.length === cachedEls.length && snapTexts.length > 0) {
+					// 数量一致：快照文本 → 对齐 DOM 行号（同源文本作键，点击必然命中）
+					snapTexts.forEach((t, i) => { if (t) rowMap[t] = i; });
+				} else {
+					// 数量不一致：DOM 行 textContent 匹配兜底（首行 + 完整文本次键）
+					cachedEls.forEach((e, i) => {
+						const full = (e.textContent || "").trim();
+						const first = full.split("\n", 1)[0] || "";
+						if (first) rowMap[first] = i;
+						if (full && full.length > first.length && full.length <= 200) rowMap[full] = i;
+					});
+				}
 				// 懒加载定位：目标刚被加载出来 → 立即定位
 				if (pendingTarget && rowMap[pendingTarget] !== undefined) {
 					const el = cachedEls[rowMap[pendingTarget]];
@@ -1096,6 +1113,17 @@ window.__ModuleLoader__.load({
 				}
 				// 目标还没出现 → 继续触发"加载更早"（有更早按钮且非加载中）
 				if (pendingTarget) maybeLoadOlder();
+			}
+			// 从快照节点提取首行文本（与 collectUserMessages 同逻辑）
+			function nodeTextOf(node) {
+				const blocks = node.content || node.blocks || [];
+				let text = "";
+				for (const b of blocks) {
+					if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
+						text += b.text + "\n";
+					}
+				}
+				return text.trim().split("\n", 1)[0] || "";
 			}
 			// 触发对话区"加载更早"（懒加载历史）：优先走官方 binding.session.loadOlder()
 			// 编程式分页加载（dsh 官方 ChatView 按钮同机制），节流防止连点。
