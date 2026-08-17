@@ -1087,7 +1087,7 @@ window.__ModuleLoader__.load({
 					const snap = binding.session.getSnapshot();
 					const nodes = (snap && snap.nodes) || [];
 					snapTexts = nodes
-						.filter((n) => n && (n.kind === "user" || n.kind === "steering"))
+						.filter((n) => n && n.kind === "user")
 						.map(nodeTextOf)
 						.filter((t) => !!t);
 				} catch (e) {}
@@ -1169,7 +1169,7 @@ window.__ModuleLoader__.load({
 				const nodes = snap && snap.nodes;
 				if (!Array.isArray(nodes)) return out;
 				for (const node of nodes) {
-					if (node.kind !== "user" && node.kind !== "steering") continue;
+					if (node.kind !== "user") continue;
 					const blocks = node.content || node.blocks || [];
 					let text = "";
 					for (const b of blocks) {
@@ -1198,7 +1198,7 @@ window.__ModuleLoader__.load({
 				const nodes = snap && snap.nodes;
 				if (!Array.isArray(nodes)) return out;
 				for (const node of nodes) {
-					if (node.kind !== "user" && node.kind !== "steering") continue;
+					if (node.kind !== "user") continue;
 					const blocks = node.content || node.blocks || [];
 					let text = "";
 					for (const b of blocks) {
