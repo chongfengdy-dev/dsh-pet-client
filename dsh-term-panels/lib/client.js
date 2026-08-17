@@ -1235,10 +1235,21 @@ window.__ModuleLoader__.load({
 			function scrollToMessage(userIndex) {
 				activeIdx = userIndex;
 				applyActive();
+				const text = userMsgs[userIndex];
+				if (!text) return;
 				const root = findChatRoot();
 				if (!root) return;
+				// 文本匹配定位：DOM 的 user 行包含历史全部消息（快照只剩最近几条），
+				// 数组下标 ≠ DOM 全局行号，必须按首行文本匹配目标行再滚动。
 				const els = root.querySelectorAll('[data-chat-flow-kind="user"]');
-				const el = els[userIndex];
+				let el = null;
+				for (const e of els) {
+					const t = (e.textContent || "").trim().split("\n", 1)[0] || "";
+					if (t === text || (text.length > 4 && t.indexOf(text) !== -1) || (text.length > 4 && text.indexOf(t) !== -1)) {
+						el = e;
+						break;
+					}
+				}
 				if (!el) return;
 				const container = findScrollContainer(root);
 				if (container) {
