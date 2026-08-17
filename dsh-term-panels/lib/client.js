@@ -1016,6 +1016,9 @@ window.__ModuleLoader__.load({
 
 			// ---- 数据：history 事件流（user/message 文本在 data.content blocks） ----
 			// 只显示主本人提问（source.kind==="user"）；**全部消息**（不分今天/之前）。
+			// history 分页契约：maxMessages 默认 50 条消息（user+assistant 计数），长对话会
+			// 截断早期历史 → 用 hasMore/beforeSeq 循环翻页把全部历史拉完（页序为最新在前，
+			// 收集后整体反转恢复旧→新，globalIdx 与对话区 DOM user 行号一一对应）。
 			function loadMsgs() {
 				const sid = currentSessionId();
 				if (!sid) { msgs = []; renderRows(); return; }
@@ -1029,38 +1032,58 @@ window.__ModuleLoader__.load({
 					}
 				}
 				if (!connection || !connection.api || !connection.api.sessions || !connection.api.sessions.history) return;
-				connection.api.sessions.history({ sessionId: sid }).then((r) => {
-					const events = r && r.result && r.result.ok ? ((r.result.value && r.result.value.events) || []) : [];
+				(async () => {
+					const collected = [];   // 页数组（最新页在前）
+					let beforeSeq;
+					let hasMore = true;
+					for (let page = 0; page < 30 && hasMore; page++) {
+						const payload = { sessionId: sid, maxMessages: 200 };
+						if (beforeSeq !== undefined) payload.beforeSeq = beforeSeq;
+						const r = await connection.api.sessions.history(payload);
+						const value = r && r.result && r.result.ok ? r.result.value : null;
+						const events = (value && value.events) || [];
+						if (!events.length) break;
+						collected.push(events);
+						const first = events[0];
+						const firstEv = first && (first.event || first);
+						const nextSeq = firstEv && firstEv.seq;
+						hasMore = !!(value && value.hasMore);
+						if (!hasMore || nextSeq === undefined || nextSeq === beforeSeq) break;
+						beforeSeq = nextSeq;
+					}
+					// 反转页序 → 旧→新；过滤 user/message + source.kind==user，按序计数 globalIdx
 					const all = [];
-					for (const entry of events) {
-						const ev = entry && (entry.event || entry);
-						if (!ev || ev.type !== "user/message") continue;
-						// 只显示主本人提问（source.kind==="user"；排除 steering/plugin/compact 等非真人提问）
-						const srcKind = ev.data && ev.data.source && ev.data.source.kind;
-						if (srcKind !== undefined && srcKind !== "user") continue;
-						const dd = ev.data || {};
-						let text = "";
-						const content = dd.content || (dd.message && dd.message.content) || [];
-						if (Array.isArray(content)) {
-							for (const b of content) {
-								if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
-									text += b.text + "\n";
+					for (let p = collected.length - 1; p >= 0; p--) {
+						for (const entry of collected[p]) {
+							const ev = entry && (entry.event || entry);
+							if (!ev || ev.type !== "user/message") continue;
+							// 只显示主本人提问（source.kind==="user"；排除 steering/plugin/compact 等非真人提问）
+							const srcKind = ev.data && ev.data.source && ev.data.source.kind;
+							if (srcKind !== undefined && srcKind !== "user") continue;
+							const dd = ev.data || {};
+							let text = "";
+							const content = dd.content || (dd.message && dd.message.content) || [];
+							if (Array.isArray(content)) {
+								for (const b of content) {
+									if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
+										text += b.text + "\n";
+									}
 								}
+							} else if (typeof dd.text === "string") {
+								text = dd.text;
 							}
-						} else if (typeof dd.text === "string") {
-							text = dd.text;
+							text = text.trim();
+							if (!text) continue;
+							const g = all.length;
+							all.push({ text, time: ev.time || 0, globalIdx: g });
 						}
-						text = text.trim();
-						if (!text) continue;
-						const g = all.length;
-						all.push({ text, time: ev.time || 0, globalIdx: g });
 					}
 					msgs = all;
 					// 初始蓝色 = 最后一条（最新；刷新时页面在底部，最底下横杠应蓝）
 					if (msgs.length) setActive(msgs[msgs.length - 1].globalIdx);
 					renderRows();
 					ensureSpy();
-				}).catch(() => {});
+				})().catch(() => {});
 			}
 
 			function renderRows() {
