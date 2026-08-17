@@ -799,10 +799,49 @@ window.__ModuleLoader__.load({
 		function buildMouseGesture() {
 			const THRESHOLD = 30;      // 手势有效位移（px）
 			const REVERSE = 20;        // 反向判定阈值（px）
-			let startY = 0, lastY = 0;
+			const MOVE_MENU = 5;       // 移动超过该值即视为拖动（阻止右键菜单）
+			let startX = 0, startY = 0, lastY = 0;
 			let totalDy = 0;           // 累计位移（正=向下，最终决定滚顶/滚底）
 			let phase = "none";        // none|up|down|reversed
 			let active = false;        // 手势进行中（超过阈值后）
+			let moved = false;         // 是否已拖动（阻止右键菜单）
+
+			// 拖行轨迹：起点圆点 + 跟随线（拖动时可见）
+			const trail = document.createElement("div");
+			const dot = document.createElement("div");
+			Object.assign(trail.style, {
+				position: "fixed", left: "0", top: "0", zIndex: "99999",
+				height: "2px", borderRadius: "1px",
+				background: "var(--dsw-alias-state-business-primary)",
+				opacity: ".6", pointerEvents: "none", display: "none",
+				transformOrigin: "left center",
+			});
+			Object.assign(dot.style, {
+				position: "fixed", left: "0", top: "0", zIndex: "99999",
+				width: "8px", height: "8px", borderRadius: "50%",
+				background: "var(--dsw-alias-state-business-primary)",
+				opacity: ".6", pointerEvents: "none", display: "none",
+				transform: "translate(-50%, -50%)",
+			});
+			document.body.appendChild(trail);
+			document.body.appendChild(dot);
+			function showTrail(x1, y1, x2, y2) {
+				const dx = x2 - x1, dy = y2 - y1;
+				const len = Math.sqrt(dx * dx + dy * dy);
+				const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+				trail.style.display = "block";
+				trail.style.left = x1 + "px";
+				trail.style.top = y1 + "px";
+				trail.style.width = Math.max(len, 2) + "px";
+				trail.style.transform = "rotate(" + angle + "deg)";
+				dot.style.display = "block";
+				dot.style.left = x1 + "px";
+				dot.style.top = y1 + "px";
+			}
+			function hideTrail() {
+				trail.style.display = "none";
+				dot.style.display = "none";
+			}
 
 			// 找到可滚动的最近容器（优先鼠标所在滚动区，兜底整个页面）
 			function findScrollable(el) {
@@ -817,16 +856,21 @@ window.__ModuleLoader__.load({
 
 			document.addEventListener("mousedown", (e) => {
 				if (e.button !== 2) return;   // 仅右键
-				startY = lastY = e.clientY;
+				startX = e.clientX; startY = lastY = e.clientY;
 				totalDy = 0;
 				phase = "none";
 				active = false;
+				moved = false;
 			});
 			document.addEventListener("mousemove", (e) => {
 				if (e.buttons !== 2) return;   // 右键未按住则忽略
 				const dy = e.clientY - lastY;
 				lastY = e.clientY;
 				totalDy += dy;
+				if (Math.abs(e.clientY - startY) >= MOVE_MENU || Math.abs(e.clientX - startX) >= MOVE_MENU) {
+					moved = true;
+					showTrail(startX, startY, e.clientX, e.clientY);
+				}
 				if (!active && Math.abs(totalDy) >= THRESHOLD) active = true;
 				if (!active) return;
 				// 初始方向
@@ -840,6 +884,7 @@ window.__ModuleLoader__.load({
 			});
 			document.addEventListener("mouseup", (e) => {
 				if (e.button !== 2) return;
+				hideTrail();
 				if (!active) return;
 				const sc = findScrollable(e.target);
 				if (phase === "reversed") {
@@ -855,9 +900,9 @@ window.__ModuleLoader__.load({
 				active = false;
 				phase = "none";
 			});
-			// 手势中拦截右键菜单；未移动的普通右键放行
+			// 拖动中阻止右键菜单；未移动的普通右键放行
 			document.addEventListener("contextmenu", (e) => {
-				if (active) e.preventDefault();
+				if (moved || active) e.preventDefault();
 			});
 		}
 
