@@ -900,99 +900,67 @@ window.__ModuleLoader__.load({
 		const OUTLINE_PANEL_ID = "dsh-msg-outline-panel";
 		const OUTLINE_FLASH = "dsh-msg-outline-flash";
 
-				function buildMessageOutline(ctx) {
-			// 2026-08-17 v4（主验收定稿方向）：
-			// - 位置：对话区左内缘（不在左侧边栏里——之前放屏幕最左被侧边栏盖住）；
-			// - 数据：session.history 事件流（user/message 带 time 毫秒）→ 只显示今天的消息，
-			//   每条记录全局序号（定位用，因为对话区 DOM 含历史全部 user 行）；
-			// - 横线间距加大；一条横线对应一条消息（hover 横线联动面板行高亮）；
-			// - 滚动高亮（Scroll Spy）：IntersectionObserver(rootMargin -80%) 监听
-			//   对话区 user 行 → 大纲自动高亮当前阅读位置（浅蓝底+蓝字+左边框）；
-			// - 点击：平滑滚动定位 + 黄色闪烁。
+						function buildMessageOutline(ctx) {
+			// 2026-08-17 v5（主定稿方向）：
+			// - 单元素设计：平时显示一列细横杠；hover 同一元素展开为完整大纲面板
+			//   （横杠 + 行号 + 文本在同一行内，天然垂直对齐；横杠在弹出面板内）；
+			// - 位置：对话区滚动容器左外侧（侧边栏右外侧、对话区左侧，不在侧边栏里）；
+			// - 数据：session.history 事件流（user/message 带 time 毫秒 + data.content blocks），
+			//   只显示今天的消息，每条记全局序号（对话区 DOM 含历史全部 user 行，定位用）；
+			// - 点击：平滑滚动定位（无滚动高亮，主定稿去掉）；
+			// - 超长消息截断 + …，完整文本放 title。
 			if (document.getElementById(OUTLINE_RAIL_ID)) return; // 已注入
 
 			const connection = ctx.connection;
 			const sessions = ctx.sessions || (ctx.get ? ctx.get("sessions") : undefined);
 
-			// ---- 左缘横杠条（贴对话区左内缘） ----
-			const rail = document.createElement("div");
-			rail.id = OUTLINE_RAIL_ID;
-			Object.assign(rail.style, {
+			// ---- 单元素：横杠列 = 大纲面板（hover 展开） ----
+			const box = document.createElement("div");
+			box.id = OUTLINE_RAIL_ID;
+			Object.assign(box.style, {
 				position: "fixed", left: "0", top: "50%",
-				transform: "translateY(-50%)", zIndex: "99989",
-				display: "flex", flexDirection: "column", alignItems: "center",
-				gap: "10px", padding: "8px 6px",
-				borderRadius: "0 10px 10px 0",
+				transform: "translateY(-50%)", zIndex: "99990",
+				display: "flex", flexDirection: "column", gap: "10px",
+				padding: "8px", borderRadius: "10px",
+				background: "transparent", border: "1px solid transparent",
 				cursor: "pointer",
-				background: "transparent",
-				transition: "left .2s ease",
+				transition: "left .2s ease, background .15s ease, border-color .15s ease",
+				maxHeight: "70vh", overflowY: "auto",
 			});
 
-			// ---- 展开面板 ----
-			const panel = document.createElement("div");
-			panel.id = OUTLINE_PANEL_ID;
-			Object.assign(panel.style, {
-				position: "fixed", left: "34px", top: "50%",
-				transform: "translateY(-50%)", zIndex: "99990",
-				width: "300px", maxHeight: "72vh",
-				display: "none", flexDirection: "column",
-				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)",
-				border: "1px solid var(--dsw-alias-border-l2)",
-				borderRadius: "12px",
-				boxShadow: "0 8px 24px rgba(0,0,0,.25)",
-				backdropFilter: "blur(8px)",
-				color: "var(--dsw-alias-label-primary)",
-				fontFamily: 'system-ui, "Segoe UI", sans-serif',
-				fontSize: "12px",
-			});
-			const pHead = document.createElement("div");
-			Object.assign(pHead.style, {
-				display: "flex", justifyContent: "space-between", alignItems: "center",
-				padding: "9px 12px", borderBottom: "1px solid var(--dsw-alias-border-l2)",
-				flex: "none",
-			});
-			const pTitle = document.createElement("span");
-			pTitle.style.cssText = "font-weight:600;font-size:12px";
-			pTitle.textContent = "我的消息 · 今天";
-			const pCount = document.createElement("span");
-			pCount.style.cssText = "font-size:11px;color:var(--dsw-alias-label-tertiary)";
-			pHead.appendChild(pTitle);
-			pHead.appendChild(pCount);
-			const pList = document.createElement("div");
-			Object.assign(pList.style, { overflowY: "auto", padding: "6px", flex: "1" });
-			panel.appendChild(pHead);
-			panel.appendChild(pList);
+			// 展开时标题（平时隐藏）
+			const head = document.createElement("div");
+			head.style.cssText = "font-size:11px;color:var(--dsw-alias-label-tertiary);padding:0 2px 2px;display:none;font-weight:600";
+			head.textContent = "我的消息 · 今天";
+			box.appendChild(head);
 
 			// ---- 状态 ----
-			let todayMsgs = [];       // [{text, globalIdx}] 今天的我的消息（globalIdx=在全部 user 消息中的序号）
-			let rowEls = [];          // {row, num, txt, globalIdx}
-			let activeIdx = -1;       // todayMsgs 下标
+			let todayMsgs = [];       // [{text, globalIdx}] 今天的我的消息
+			let rows = [];            // {bar, num, txt}
 			let sessionId = null;
-			let binding = null;
-			let spyObserver = null;
-			let spyRoot = null;
-			let lastUserRows = -1;
+			let expanded = false;
 
 			function todayStartMs() {
 				const d = new Date();
 				d.setHours(0, 0, 0, 0);
 				return d.getTime();
 			}
-
 			function currentSessionId() {
 				const snap = sessions && sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
 				return snap && snap.current !== undefined ? snap.current : null;
 			}
 
-			// ---- 数据：history 事件流（user/message 带 time） ----
+			// ---- 数据：history 事件流（user/message 文本在 data.content blocks） ----
 			function loadToday() {
 				const sid = currentSessionId();
-				if (!sid) { todayMsgs = []; renderAll(); return; }
+				if (!sid) { todayMsgs = []; renderRows(); return; }
 				if (sid !== sessionId) {
 					sessionId = sid;
-					try { binding = sessions.binding(sid); } catch (e) { binding = null; }
-					if (binding && binding.session && binding.session.subscribe) {
-						try { binding.session.subscribe(() => loadToday()); } catch (e) {}
+					if (sessions && sessions.binding) {
+						try {
+							const b = sessions.binding(sid);
+							if (b && b.session && b.session.subscribe) b.session.subscribe(() => loadToday());
+						} catch (e) {}
 					}
 				}
 				if (!connection || !connection.api || !connection.api.sessions || !connection.api.sessions.history) return;
@@ -1004,8 +972,6 @@ window.__ModuleLoader__.load({
 						const ev = entry && (entry.event || entry);
 						if (!ev || ev.type !== "user/message") continue;
 						const dd = ev.data || {};
-						// 文本在 data.content（blocks 数组，与 snapshot node.content 同构）：
-						// [{type:"text",text:"..."}...]；兼容 data.text 直给形式
 						let text = "";
 						const content = dd.content || (dd.message && dd.message.content) || [];
 						if (Array.isArray(content)) {
@@ -1023,102 +989,67 @@ window.__ModuleLoader__.load({
 						all.push({ text, time: ev.time || 0, globalIdx: g });
 					}
 					todayMsgs = all.filter((m) => m.time >= start);
-					renderAll();
-					ensureSpy();
+					renderRows();
 				}).catch(() => {});
 			}
 
-			function renderAll() { renderRail(); renderPanel(); }
-
-			function renderRail() {
-				rail.textContent = "";
-				const n = Math.min(todayMsgs.length, 60);
-				for (let i = 0; i < n; i++) {
-					const bar = document.createElement("div");
-					Object.assign(bar.style, {
-						width: "16px", height: "2px", borderRadius: "1px",
-						background: "var(--dsw-alias-border-l3)",
-					});
-					bar.title = (i + 1) + ". " + (todayMsgs[i].text || "");
-					bar.addEventListener("mouseenter", () => highlightRow(i));
-					bar.addEventListener("click", () => scrollToMessage(i));
-					rail.appendChild(bar);
-				}
-				if (todayMsgs.length > 60) {
-					const more = document.createElement("div");
-					more.style.cssText = "font-size:9px;color:var(--dsw-alias-label-tertiary)";
-					more.textContent = "+" + (todayMsgs.length - 60);
-					rail.appendChild(more);
-				}
-			}
-
-			function renderPanel() {
-				pList.textContent = "";
-				rowEls = [];
-				pCount.textContent = todayMsgs.length ? String(todayMsgs.length) + " 条" : "";
+			function renderRows() {
+				// 保留 head（第一个子节点），清空其余行
+				while (box.children.length > 1) box.removeChild(box.lastChild);
+				rows = [];
+				const showHead = expanded && todayMsgs.length > 0;
+				head.style.display = showHead ? "" : "none";
 				if (!todayMsgs.length) {
-					const e = document.createElement("div");
-					e.style.cssText = "padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary)";
-					e.textContent = "今天还没有我的消息";
-					pList.appendChild(e);
+					if (expanded) {
+						const e = document.createElement("div");
+						e.style.cssText = "padding:4px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px";
+						e.textContent = "今天还没有我的消息";
+						box.appendChild(e);
+					}
 					return;
 				}
-				todayMsgs.forEach((m, idx) => {
+				const n = Math.min(todayMsgs.length, 60);
+				for (let i = 0; i < n; i++) {
+					const m = todayMsgs[i];
 					const row = document.createElement("div");
-					Object.assign(row.style, {
-						display: "flex", gap: "8px", padding: "6px 10px",
-						borderRadius: "8px", cursor: "pointer", alignItems: "baseline",
-						borderLeft: "3px solid transparent",
-					});
-					row.onmouseenter = () => { if (activeIdx !== idx) row.style.background = "var(--dsw-alias-interactive-bg-hover)"; };
-					row.onmouseleave = () => { applyActive(); };
+					row.style.cssText = "display:flex;align-items:center;gap:8px;padding:0;border-radius:6px;cursor:pointer";
+					const bar = document.createElement("div");
+					bar.style.cssText = "flex:none;width:16px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3)";
 					const num = document.createElement("span");
-					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;min-width:24px;text-align:right";
-					num.textContent = String(idx + 1);
+					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;min-width:22px;text-align:right;color:var(--dsw-alias-label-tertiary);display:none";
+					num.textContent = String(i + 1);
 					const txt = document.createElement("span");
-					txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+					txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:none;color:var(--dsw-alias-label-secondary)";
 					const short = m.text.length > 60 ? m.text.slice(0, 60) + "…" : m.text;
 					txt.textContent = short;
 					txt.title = m.text;
+					row.appendChild(bar);
 					row.appendChild(num);
 					row.appendChild(txt);
-					row.addEventListener("click", () => scrollToMessage(idx));
-					pList.appendChild(row);
-					rowEls.push({ row, num, txt, globalIdx: m.globalIdx });
-				});
-				applyActive();
-			}
-
-			function highlightRow(idx) {
-				if (rowEls[idx]) {
-					rowEls[idx].row.scrollIntoView({ block: "nearest" });
-					rowEls[idx].row.style.background = "var(--dsw-alias-interactive-bg-hover)";
+					row.addEventListener("click", () => scrollToMessage(i));
+					box.appendChild(row);
+					rows.push({ bar, num, txt });
 				}
+				updateExpanded(expanded);
 			}
 
-			// ---- 点击：平滑滚动定位 + 闪烁 ----
-			function scrollToMessage(todayIdx) {
-				const m = todayMsgs[todayIdx];
-				if (!m) return;
-				const root = findChatRoot();
-				if (!root) return;
-				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
-				const el = rows[m.globalIdx];
-				if (!el) return;
-				const container = findScrollContainer(root);
-				if (container) {
-					const cr = container.getBoundingClientRect();
-					const tr = el.getBoundingClientRect();
-					container.scrollTo({ top: container.scrollTop + tr.top - cr.top - 12, behavior: "smooth" });
-				} else {
-					el.scrollIntoView({ behavior: "smooth", block: "start" });
+			// ---- hover 展开 / 收起（同一元素：横杠列 ↔ 完整大纲） ----
+			function updateExpanded(on) {
+				expanded = on;
+				box.style.background = on ? "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)" : "transparent";
+				box.style.borderColor = on ? "var(--dsw-alias-border-l2)" : "transparent";
+				box.style.boxShadow = on ? "0 8px 24px rgba(0,0,0,.25)" : "none";
+				head.style.display = (on && todayMsgs.length > 0) ? "" : "none";
+				for (const r of rows) {
+					r.num.style.display = on ? "" : "none";
+					r.txt.style.display = on ? "" : "none";
 				}
-				setActive(todayIdx);
-				el.classList.add(OUTLINE_FLASH);
-				setTimeout(() => el.classList.remove(OUTLINE_FLASH), 1600);
+				if (on && !todayMsgs.length) renderRows();
 			}
+			box.addEventListener("mouseenter", () => updateExpanded(true));
+			box.addEventListener("mouseleave", () => updateExpanded(false));
 
-			// ---- 滚动高亮（Scroll Spy） ----
+			// ---- 点击：平滑滚动定位（无高亮） ----
 			function findChatRoot() {
 				return document.querySelector('[data-slot="conversation"]');
 			}
@@ -1132,93 +1063,47 @@ window.__ModuleLoader__.load({
 				}
 				return null;
 			}
-			function ensureSpy() {
+			function scrollToMessage(todayIdx) {
+				const m = todayMsgs[todayIdx];
+				if (!m) return;
 				const root = findChatRoot();
 				if (!root) return;
-				if (!spyObserver || spyRoot !== root) {
-					if (spyObserver) spyObserver.disconnect();
-					spyRoot = root;
-					spyObserver = new IntersectionObserver((entries) => {
-						const hit = entries.filter((e) => e.isIntersecting);
-						if (!hit.length) return;
-						const last = hit[hit.length - 1];
-						const g = last.target.dataset.userSeq;
-						if (g === undefined) return;
-						// 全局 user 序号 → 今天的下标
-						for (let i = 0; i < todayMsgs.length; i++) {
-							if (todayMsgs[i].globalIdx === Number(g)) { setActive(i); break; }
-						}
-					}, { root: findScrollContainer(root) || null, rootMargin: "0px 0px -80% 0px" });
-				} else if (spyObserver) {
-					spyObserver.disconnect();
+				const els = root.querySelectorAll('[data-chat-flow-kind="user"]');
+				const el = els[m.globalIdx];
+				if (!el) return;
+				const container = findScrollContainer(root);
+				if (container) {
+					const cr = container.getBoundingClientRect();
+					const tr = el.getBoundingClientRect();
+					container.scrollTo({ top: container.scrollTop + tr.top - cr.top - 12, behavior: "smooth" });
+				} else {
+					el.scrollIntoView({ behavior: "smooth", block: "start" });
 				}
-				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
-				rows.forEach((el, i) => { el.dataset.userSeq = String(i); spyObserver.observe(el); });
 			}
 
-			function setActive(idx) {
-				if (idx === activeIdx) return;
-				activeIdx = idx;
-				applyActive();
-			}
-			function applyActive() {
-				rowEls.forEach((r, i) => {
-					const on = i === activeIdx;
-					r.row.style.background = on ? "var(--dsw-static-deepseek-50)" : "transparent";
-					r.row.style.borderLeft = on ? "3px solid var(--dsw-alias-brand-primary)" : "3px solid transparent";
-					r.num.style.color = on ? "var(--dsw-static-deepseek-500)" : "var(--dsw-alias-label-tertiary)";
-					r.txt.style.color = on ? "var(--dsw-static-deepseek-600)" : "var(--dsw-alias-label-secondary)";
-					r.row.style.fontWeight = on ? "500" : "400";
-				});
-			}
-
-			// ---- 位置跟随对话区左内缘 ----
-			function placeRail() {
+			// ---- 位置：对话区滚动容器左外侧（侧边栏右外侧、对话区左侧） ----
+			function placeBox() {
 				const root = findChatRoot();
-				if (!root) return;
+				const container = root ? (findScrollContainer(root) || root) : null;
+				if (!container) return;
 				try {
-					const r = root.getBoundingClientRect();
-					if (r.width > 0) {
-						rail.style.left = (r.left + 4) + "px";
-						panel.style.left = (r.left + 28) + "px";
-					}
+					const r = container.getBoundingClientRect();
+					if (r.width > 0) box.style.left = Math.max(0, r.left - 34) + "px";
 				} catch (e) {}
 			}
-
-			// ---- hover 展开 / 移出收起 ----
-			let hideTimer = null;
-			rail.addEventListener("mouseenter", () => {
-				clearTimeout(hideTimer);
-				renderPanel();
-				panel.style.display = "flex";
-			});
-			panel.addEventListener("mouseenter", () => { clearTimeout(hideTimer); });
-			const hidePanel = () => {
-				hideTimer = setTimeout(() => { panel.style.display = "none"; }, 180);
-			};
-			rail.addEventListener("mouseleave", hidePanel);
-			panel.addEventListener("mouseleave", hidePanel);
 
 			// ---- 刷新 ----
 			if (sessions && sessions.list && sessions.list.subscribe) {
 				try { sessions.list.subscribe(() => loadToday()); } catch (e) {}
 			}
 			loadToday();
-			setInterval(() => { loadToday(); placeRail(); }, 10000);
-			setInterval(placeRail, 2000);
+			setInterval(() => { loadToday(); placeBox(); }, 10000);
+			setInterval(placeBox, 2000);
 
-			// ---- 定位高亮动画样式 ----
-			if (!document.getElementById("dsh-msg-outline-style")) {
-				const st = document.createElement("style");
-				st.id = "dsh-msg-outline-style";
-				st.textContent = "." + OUTLINE_FLASH + "{animation:dshOutlineFlash 1.6s ease 1}"
-					+ "@keyframes dshOutlineFlash{0%,100%{background:transparent}15%,35%{background:rgba(255,200,0,.35)}}";
-				document.head.appendChild(st);
-			}
-
-			document.body.appendChild(rail);
-			document.body.appendChild(panel);
+			document.body.appendChild(box);
 		}
+
+
 
 exports.apply = apply;
 		exports.inject = ["connection", "sessions"];
