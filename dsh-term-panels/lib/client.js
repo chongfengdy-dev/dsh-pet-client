@@ -1067,9 +1067,10 @@ window.__ModuleLoader__.load({
 			}
 
 			// 文本 → DOM user 行号索引：数据/DOM 变化时重建（点击时 O(1) 查表，不遍历）
-			// 键 = 快照节点提取的文本（与记录同源，必然相等）；值 = 按顺序对齐 DOM 行号
-			// （快照 user 节点顺序 = 对话区 DOM user 行顺序，都是已加载消息的时间序）。
-			// 数量不一致时（渲染差异）退化为 DOM 行 textContent 匹配兜底。
+			// 用官方 chat.order（渲染顺序 key 列表）+ chat.nodes（key→节点 Map）：
+			// 按 order 筛出 kind===user 的节点，第 i 个 user 节点 = DOM 第 i 个 user 行
+			// （DOM data-chat-anchor-key 顺序 = chat.order 顺序，官方渲染契约），
+			// 彻底不依赖 DOM 行数与快照节点数对齐（snap74/dom70 那种 MISMATCH 也正确）。
 			let rowMap = {};
 			let cachedEls = [];
 			let rowObserver = null;
@@ -1081,21 +1082,26 @@ window.__ModuleLoader__.load({
 				const root = findChatRoot();
 				if (!root) return;
 				cachedEls = Array.from(root.querySelectorAll('[data-chat-flow-kind="user"]'));
-				// 快照 user 节点文本（与记录同源）
-				let snapTexts = [];
+				// 官方顺序：chat.order 里 kind===user 的节点（快照文本作键，值=user 序号=DOM 行号）
 				try {
 					const snap = binding.session.getSnapshot();
-					const nodes = (snap && snap.nodes) || [];
-					snapTexts = nodes
-						.filter((n) => n && n.kind === "user")
-						.map(nodeTextOf)
-						.filter((t) => !!t);
+					const chat = (snap && snap.chat) || null;
+					const order = chat && chat.order;
+					const nodes = chat && chat.nodes;
+					if (Array.isArray(order) && nodes && typeof nodes.get === "function") {
+						let userIdx = 0;
+						for (const key of order) {
+							const node = nodes.get(key);
+							if (!node || node.kind !== "user") continue;
+							const t = nodeTextOf(node);
+							if (!t) continue;
+							if (cachedEls[userIdx]) rowMap[t] = userIdx;
+							userIdx++;
+						}
+					}
 				} catch (e) {}
-				if (snapTexts.length === cachedEls.length && snapTexts.length > 0) {
-					// 数量一致：快照文本 → 对齐 DOM 行号（同源文本作键，点击必然命中）
-					snapTexts.forEach((t, i) => { if (t) rowMap[t] = i; });
-				} else {
-					// 数量不一致：DOM 行 textContent 匹配兜底（首行 + 完整文本次键）
+				// 兜底（order 不可用）：快照 nodes 顺序对齐 + DOM 文本匹配
+				if (!Object.keys(rowMap).length && cachedEls.length) {
 					cachedEls.forEach((e, i) => {
 						const full = (e.textContent || "").trim();
 						const first = full.split("\n", 1)[0] || "";
@@ -1103,10 +1109,6 @@ window.__ModuleLoader__.load({
 						if (full && full.length > first.length && full.length <= 200) rowMap[full] = i;
 					});
 				}
-				// 诊断：窗口标题显示数量（主排查用，可删）
-				try {
-					document.title = "outline snap=" + snapTexts.length + " dom=" + cachedEls.length + (snapTexts.length === cachedEls.length ? " ALIGN" : " MISMATCH");
-				} catch (e) {}
 				// 懒加载定位：目标刚被加载出来 → 立即定位
 				if (pendingTarget && rowMap[pendingTarget] !== undefined) {
 					const el = cachedEls[rowMap[pendingTarget]];
