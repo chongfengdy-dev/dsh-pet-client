@@ -226,6 +226,128 @@ app.get('/api/balance', (req, res) => {
   req2.end();
 });
 
+// ---------- 平台用量代理（Token HUB 六项数据源：输入命中/未命中/输出/今日消耗） ----------
+// 2026-08-17 主定稿：余额走官方 API（/api/balance），其余走 DeepSeek 开放平台
+// 私有用量接口（platform.deepseek.com/api/v0/usage/amount|cost，需网页登录 token）。
+// 干跑实测：必须带浏览器特征头（UA/Origin/Referer），否则平台 WAF 拦截（Request Blocked）。
+// 返回结构：amount 的 biz_data 是对象 {total, days}；cost 的 biz_data 是数组
+// [{total, days, currency}]（取 [0]）。days 为当月逐日明细，date 形如 "2026-08-17"，
+// 每格 data 按模型给 usage 数组，type 枚举：
+//   PROMPT_CACHE_HIT_TOKEN=输入(命中) / PROMPT_CACHE_MISS_TOKEN=输入(未命中)
+//   / RESPONSE_TOKEN=输出 / REQUEST=请求次数；amount 是 token 数，cost 是金额（元，字符串）。
+const PLATFORM_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
+const PLATFORM_ORIGIN = 'https://platform.deepseek.com';
+
+function readPlatformToken() {
+  try {
+    const j = JSON.parse(fs.readFileSync(path.join(__dirname, 'platform-token.json'), 'utf8'));
+    return j.userToken || null;
+  } catch (e) { return null; }
+}
+
+function platformGet(apiPath) {
+  const token = readPlatformToken();
+  if (!token) return Promise.reject(new Error('no platform token'));
+  return new Promise((resolve, reject) => {
+    const req = https.request({
+      host: 'platform.deepseek.com',
+      path: apiPath,
+      method: 'GET',
+      headers: {
+        Authorization: 'Bearer ' + token,
+        Accept: 'application/json',
+        'User-Agent': PLATFORM_UA,
+        Origin: PLATFORM_ORIGIN,
+        Referer: PLATFORM_ORIGIN + '/',
+        'Accept-Language': 'zh-CN,zh;q=0.9',
+      },
+      timeout: 10000,
+    }, (resp) => {
+      let body = '';
+      resp.on('data', (c) => { body += c; });
+      resp.on('end', () => {
+        try { resolve(JSON.parse(body)); } catch (e) { reject(new Error('bad json from platform')); }
+      });
+    });
+    req.on('error', reject);
+    req.on('timeout', () => req.destroy());
+    req.end();
+  });
+}
+
+function localDateStr(ms = Date.now()) {
+  const d = new Date(ms);
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const day = String(d.getDate()).padStart(2, '0');
+  return `${d.getFullYear()}-${m}-${day}`;
+}
+
+function sumUsageType(dayData, type) {
+  let s = 0;
+  for (const m of (dayData || [])) {
+    for (const u of (m.usage || [])) {
+      if (u.type === type) s += parseFloat(u.amount) || 0;
+    }
+  }
+  return s;
+}
+
+function findDayData(days, dateStr) {
+  const hit = (days || []).find((x) => x.date === dateStr);
+  return hit ? hit.data : null;
+}
+
+let platformUsageCache = { at: 0, data: null, error: null };
+let platformUsageBusy = false;
+
+function refreshPlatformUsage() {
+  if (platformUsageBusy) return;
+  platformUsageBusy = true;
+  const now = new Date();
+  const q = `?month=${now.getMonth() + 1}&year=${now.getFullYear()}`;
+  Promise.all([
+    platformGet('/api/v0/usage/amount' + q),
+    platformGet('/api/v0/usage/cost' + q),
+  ]).then(([amount, cost]) => {
+    const aBiz = amount && amount.data && amount.data.biz_data;
+    const cBizRaw = cost && cost.data && cost.data.biz_data;
+    const cBiz = Array.isArray(cBizRaw) ? (cBizRaw[0] || {}) : (cBizRaw || {});
+    const today = localDateStr();
+    const aData = findDayData(aBiz ? aBiz.days : null, today);
+    const cData = findDayData(cBiz.days, today);
+    const hit = sumUsageType(aData, 'PROMPT_CACHE_HIT_TOKEN');
+    const miss = sumUsageType(aData, 'PROMPT_CACHE_MISS_TOKEN');
+    platformUsageCache = {
+      at: Date.now(),
+      data: {
+        source: 'platform',
+        date: today,
+        inputHit: hit,
+        inputMiss: miss,
+        output: sumUsageType(aData, 'RESPONSE_TOKEN'),
+        requests: sumUsageType(aData, 'REQUEST'),
+        cost: sumUsageType(cData, 'PROMPT_CACHE_HIT_TOKEN')
+          + sumUsageType(cData, 'PROMPT_CACHE_MISS_TOKEN')
+          + sumUsageType(cData, 'RESPONSE_TOKEN'),
+        costCurrency: cBiz.currency || 'CNY',
+      },
+      error: null,
+    };
+  }).catch((e) => {
+    platformUsageCache = { at: Date.now(), data: null, error: String(e && e.message || e) };
+  }).finally(() => { platformUsageBusy = false; });
+}
+refreshPlatformUsage();
+setInterval(refreshPlatformUsage, 60000);
+app.get('/api/platform-usage', (req, res) => {
+  if (platformUsageCache.data && Date.now() - platformUsageCache.at < 60000) {
+    return res.json(platformUsageCache.data);
+  }
+  if (!platformUsageBusy) refreshPlatformUsage();
+  if (platformUsageCache.data) return res.json(platformUsageCache.data);  // 旧值先给
+  res.status(503).json({ error: platformUsageCache.error || 'aggregating', fallback: true });
+});
+
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 

@@ -1,0 +1,5 @@
+{
+  "userToken": "REPLACE_WITH_PLATFORM_TOKEN",
+  "note": "DeepSeek 开放平台登录 token（platform.deepseek.com localStorage userToken），用于平台私有用量接口 /api/v0/usage/amount|cost。真实文件放在 ~/.dsh/terminal/platform-token.json（chmod 600），不要提交真实 token 到仓库。过期后重新导出替换。",
+  "savedAt": ""
+}

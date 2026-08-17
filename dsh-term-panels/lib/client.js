@@ -417,12 +417,15 @@ window.__ModuleLoader__.load({
 			window.addEventListener("hashchange", handleHash);
 			handleHash();
 
-			// ---------- HUD 数据：词元（后端聚合）+ 余额 ----------
-			// 提问橙色由后端检测（会话 approval/asked），插件不再订阅前端事件
-			const hudState = { input: 0, output: 0, cacheRead: 0, balance: null };
+			// ---------- HUD 数据：词元（平台用量接口，回落会话聚合）+ 余额 ----------
+			// 2026-08-17 主定稿：六项=输入(命中)/输入(未命中)/命中率/输出/今日消耗/余额。
+			// 优先 3081 /api/platform-usage（DeepSeek 平台官方每日用量，含金额），
+			// 失败（无平台 token/接口异常）回落 /api/today-usage（本地会话日志，无金额）。
+			// 余额走官方 API /api/balance。
+			const hudState = { input: 0, output: 0, cacheRead: 0, balance: null, cost: null, costCurrency: "CNY" };
 			renderHud(hud, hudState);
-			fetchTodayUsage(hud, hudState);                       // 词元：读 3081 聚合（会话记录）
-			setInterval(() => fetchTodayUsage(hud, hudState), 10000);
+			fetchUsage(hud, hudState);
+			setInterval(() => fetchUsage(hud, hudState), 10000);
 			refreshBalance(hud, hudState);
 			setInterval(() => refreshBalance(hud, hudState), 120000); // 余额 2 分钟刷新
 		}
@@ -796,12 +799,16 @@ window.__ModuleLoader__.load({
 				d.appendChild(v);
 				return d;
 			};
-			// 四项：输入 / 输出 / 缓存命中率 / 余额（主定稿 2026-08-16）
-			const hitTotal = state.input + state.cacheRead;
-			const hitRate = hitTotal > 0 ? Math.round(state.cacheRead / hitTotal * 100) : 0;
-			hud.grid.appendChild(row("输入", fmt(state.input)));
-			hud.grid.appendChild(row("输出", fmt(state.output)));
+			// 六项：输入(命中) / 输入(未命中) / 命中率 / 输出 / 今日消耗 / 余额（主定稿 2026-08-17）
+			// 平台接口：inputHit/inputMiss 官方拆分；回落本地日志时命中=cacheRead，未命中=input-cacheRead
+			const hitTotal = state.inputHit !== undefined ? state.inputHit + state.inputMiss : state.input + state.cacheRead;
+			const hit = state.inputHit !== undefined ? state.inputHit : state.cacheRead;
+			const hitRate = hitTotal > 0 ? Math.round(hit / hitTotal * 100) : 0;
+			hud.grid.appendChild(row("输入·命中", fmt(hit)));
+			hud.grid.appendChild(row("输入·未命中", fmt(hitTotal - hit)));
 			hud.grid.appendChild(row("命中率", hitRate + "%"));
+			hud.grid.appendChild(row("输出", fmt(state.output)));
+			hud.grid.appendChild(row("今日消耗", state.cost !== null ? "¥" + state.cost.toFixed(2) : "—"));
 			hud.grid.appendChild(row("余额", state.balance !== null ? "¥" + state.balance : "…"));
 		}
 		function fmt(n) {
@@ -810,15 +817,33 @@ window.__ModuleLoader__.load({
 			return String(n);
 		}
 
-		// ---------- 今日词元（后端聚合会话记录，3081 提供） ----------
+		// ---------- 今日词元：平台用量接口优先，失败回落本地会话聚合 ----------
+		function fetchUsage(hud, state) {
+			fetch("http://127.0.0.1:3081/api/platform-usage", { mode: "cors" })
+				.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+				.then((data) => {
+					if (data && typeof data.inputHit === "number") {
+						state.inputHit = data.inputHit;
+						state.inputMiss = data.inputMiss;
+						state.output = data.output;
+						state.cost = data.cost;
+						state.costCurrency = data.costCurrency || "CNY";
+					}
+				})
+				.catch(() => fetchTodayUsage(hud, state))  // 平台不可用 → 回落会话日志
+				.finally(() => renderHud(hud, state));
+		}
 		function fetchTodayUsage(hud, state) {
 			fetch("http://127.0.0.1:3081/api/today-usage", { mode: "cors" })
 				.then((r) => r.json())
 				.then((data) => {
 					if (data && typeof data.input === "number") {
+						// 回落模式：未命中 = 总输入 - 命中（近似）；无今日消耗
+						state.inputHit = undefined;   // 标记回落，命中率用 cacheRead 口径
 						state.input = data.input;
 						state.output = data.output;
 						state.cacheRead = data.cacheRead;
+						state.cost = null;
 					}
 				})
 				.catch(() => {})
