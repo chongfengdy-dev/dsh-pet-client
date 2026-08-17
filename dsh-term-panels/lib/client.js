@@ -1408,6 +1408,8 @@ window.__ModuleLoader__.load({
 					requestAnimationFrame(() => {
 						requestAnimationFrame(() => {
 							box.scrollTop = box.scrollHeight;
+							// 临时诊断：显示滚动信息（排查用，可删）
+							try { document.title = "outline scrollH=" + box.scrollHeight + " clientH=" + box.clientHeight + " rows=" + rows.length; } catch (e) {}
 						});
 					});
 				}
