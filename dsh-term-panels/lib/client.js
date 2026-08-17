@@ -429,10 +429,10 @@ window.__ModuleLoader__.load({
 			refreshBalance(hud, hudState);
 			setInterval(() => refreshBalance(hud, hudState), 120000); // 余额 2 分钟刷新
 
-			// ---------- 左侧历史会话栏（DeepSeek 网页版样式） ----------
-			buildHistoryBar(ctx);
+			// ---------- 左缘消息大纲条（当前会话我的消息，hover 展开） ----------
+			buildMessageOutline(ctx);
 			// sessions 服务可能晚于本插件注册（cordis 启动顺序），延迟重试一次
-			setTimeout(() => buildHistoryBar(ctx), 1500);
+			setTimeout(() => buildMessageOutline(ctx), 1500);
 		}
 
 		// ---------- 工具：悬浮按钮 ----------
@@ -890,52 +890,43 @@ window.__ModuleLoader__.load({
 				.finally(() => renderHud(hud, state));
 		}
 
-		// ========== 左侧历史会话栏（DeepSeek 网页版样式） ==========
-		// 2026-08-17 主定稿：位置=左侧悬浮（工作区右侧/对话框左侧中间空间）；
-		// 交互参考 DeepSeek 网页版——hover 会话项显示该会话我发送的消息（一条一条），
-		// 当前会话蓝色、其余灰色、hover 灰变黑；按天分组（今天/昨天/更早），
-		// 昨天以前的折叠可点开；点击会话项切换会话（sessions.open）。
-		const HIST_DOCK_ID = "dsh-panels-hist-dock";
-		const HIST_PANEL_ID = "dsh-panels-hist-panel";
-		const HIST_HOVER_ID = "dsh-panels-hist-hover";
+				// ========== 左缘消息大纲条（当前会话我的消息，hover 展开） ==========
+		// 2026-08-17 主定稿：左侧侧边栏右面、主页面左边，一列细横杠（每条=我的一条消息），
+		// 与页面无感缝合（透明底、低对比细线）；鼠标移上去横杠展开成一行行大纲
+		// （行号+消息文本，超长截断+…），点击定位对话中那条消息并高亮。
+		// 数据源：sessions.binding(id).session 快照（与 dsh-outline 同机制，实时流式）；
+		// DOM 定位：data-chat-flow-kind="user" 第 n 行 = 第 n 条我的消息（dsh 渲染契约）。
+		const OUTLINE_RAIL_ID = "dsh-msg-outline-rail";
+		const OUTLINE_PANEL_ID = "dsh-msg-outline-panel";
+		const OUTLINE_FLASH = "dsh-msg-outline-flash";
 
-		function buildHistoryBar(ctx) {
-			const connection = ctx.connection;
-			// sessions 服务：优先 ctx.sessions（inject 注入），兜底 ctx.get（dsh-client-runtime
-			// 注册的服务，cordis 标准读取；不依赖 boot manifest 的 inject 声明，避免改 package.json
-			// 后需重启 dsh web 才生效）
+		function buildMessageOutline(ctx) {
 			const sessions = ctx.sessions || (ctx.get ? ctx.get("sessions") : undefined);
-			if (!connection || !sessions) return;
-			if (document.getElementById(HIST_DOCK_ID)) return; // 已注入
+			if (!sessions) return;
+			if (document.getElementById(OUTLINE_RAIL_ID)) return; // 已注入
 
-			// ---- 左侧 dock 按钮（☰） ----
-			const dock = document.createElement("button");
-			dock.id = HIST_DOCK_ID;
-			dock.textContent = "☰";
-			dock.title = "历史会话";
-			Object.assign(dock.style, {
-				position: "fixed", left: "10px", top: "50%",
-				transform: "translateY(-50%)", zIndex: "99990",
-				width: "44px", height: "44px", borderRadius: "12px",
-				border: "1px solid var(--dsw-alias-border-l2)",
+			// ---- 左缘横杠条（无感缝合） ----
+			const rail = document.createElement("div");
+			rail.id = OUTLINE_RAIL_ID;
+			Object.assign(rail.style, {
+				position: "fixed", left: "0", top: "50%",
+				transform: "translateY(-50%)", zIndex: "99989",
+				display: "flex", flexDirection: "column", alignItems: "center",
+				gap: "5px", padding: "8px 6px",
+				borderRadius: "0 10px 10px 0",
 				cursor: "pointer",
-				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
-				color: "var(--dsw-alias-label-primary)",
-				fontSize: "18px",
-				display: "flex", alignItems: "center", justifyContent: "center",
-				backdropFilter: "blur(4px)",
-				boxShadow: "0 4px 16px rgba(0,0,0,.22)",
+				background: "transparent",
 			});
 
-			// ---- 左侧面板 ----
+			// ---- 展开面板 ----
 			const panel = document.createElement("div");
-			panel.id = HIST_PANEL_ID;
+			panel.id = OUTLINE_PANEL_ID;
 			Object.assign(panel.style, {
-				position: "fixed", left: "12px", top: "50%",
-				transform: "translateY(-50%)", zIndex: "99991",
-				width: "250px", maxHeight: "72vh",
-				display: "flex", flexDirection: "column",
-				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 92%, transparent)",
+				position: "fixed", left: "24px", top: "50%",
+				transform: "translateY(-50%)", zIndex: "99990",
+				width: "290px", maxHeight: "72vh",
+				display: "none", flexDirection: "column",
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
 				borderRadius: "12px",
 				boxShadow: "0 8px 24px rgba(0,0,0,.25)",
@@ -944,269 +935,202 @@ window.__ModuleLoader__.load({
 				fontFamily: 'system-ui, "Segoe UI", sans-serif',
 				fontSize: "12px",
 			});
-			panel.hidden = true;
-
-			// 头部
-			const head = document.createElement("div");
-			Object.assign(head.style, {
+			const pHead = document.createElement("div");
+			Object.assign(pHead.style, {
 				display: "flex", justifyContent: "space-between", alignItems: "center",
-				padding: "10px 12px", borderBottom: "1px solid var(--dsw-alias-border-l2)",
+				padding: "9px 12px", borderBottom: "1px solid var(--dsw-alias-border-l2)",
+				flex: "none",
 			});
-			const headTitle = document.createElement("span");
-			headTitle.style.cssText = "font-weight:600;font-size:12px";
-			headTitle.textContent = "历史会话";
-			const closeBtn = document.createElement("button");
-			closeBtn.textContent = "✕";
-			Object.assign(closeBtn.style, {
-				border: "none", background: "transparent", cursor: "pointer",
-				color: "var(--dsw-alias-label-secondary)", fontSize: "13px",
-				padding: "2px 6px", borderRadius: "6px",
-			});
-			closeBtn.onmouseover = () => { closeBtn.style.background = "var(--dsw-alias-interactive-bg-hover)"; };
-			closeBtn.onmouseout = () => { closeBtn.style.background = "transparent"; };
-			head.appendChild(headTitle);
-			head.appendChild(closeBtn);
-
-			// 列表容器
-			const listEl = document.createElement("div");
-			Object.assign(listEl.style, { overflowY: "auto", padding: "6px", flex: "1" });
-
-			panel.appendChild(head);
-			panel.appendChild(listEl);
-
-			// ---- hover 浮层（显示该会话我发送的消息） ----
-			const hover = document.createElement("div");
-			hover.id = HIST_HOVER_ID;
-			Object.assign(hover.style, {
-				position: "fixed", zIndex: "99995", display: "none",
-				minWidth: "220px", maxWidth: "320px", maxHeight: "60vh",
-				overflowY: "auto", padding: "10px 12px",
-				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)",
-				border: "1px solid var(--dsw-alias-border-l2)",
-				borderRadius: "10px",
-				boxShadow: "0 8px 24px rgba(0,0,0,.25)",
-				backdropFilter: "blur(8px)",
-				color: "var(--dsw-alias-label-secondary)",
-				fontSize: "12px", lineHeight: "1.5",
-				pointerEvents: "none",
-			});
+			const pTitle = document.createElement("span");
+			pTitle.style.cssText = "font-weight:600;font-size:12px";
+			pTitle.textContent = "我的消息";
+			const pCount = document.createElement("span");
+			pCount.style.cssText = "font-size:11px;color:var(--dsw-alias-label-tertiary)";
+			pHead.appendChild(pTitle);
+			pHead.appendChild(pCount);
+			const pList = document.createElement("div");
+			Object.assign(pList.style, { overflowY: "auto", padding: "6px", flex: "1" });
+			panel.appendChild(pHead);
+			panel.appendChild(pList);
 
 			// ---- 状态 ----
-			let sessionsCache = [];    // [{sessionId, title, updatedAt, running, blank}]
-			let currentId = null;
-			let hoverTimer = null;
-			let hoverShown = null;     // 当前浮层绑定的会话 id
-			const msgCache = new Map(); // sessionId -> string[]
+			let sessionId = null;
+			let binding = null;      // { session: { getSnapshot, subscribe } }
+			let userMsgs = [];       // string[]（我的消息首行文本）
 
-			function histLabel(ms) {
-				const now = new Date(), d = new Date(ms);
-				const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-				const day0 = new Date(d.getFullYear(), d.getMonth(), d.getDate());
-				const diff = Math.round((today0 - day0) / 86400000);
-				if (diff === 0) return { g: "today", t: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` };
-				if (diff === 1) return { g: "yesterday", t: "昨天" };
-				return { g: "earlier", t: `${d.getMonth() + 1}月${d.getDate()}日` };
+			function currentSessionId() {
+				const snap = sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
+				return snap && snap.current !== undefined ? snap.current : null;
 			}
 
-			function itemTitle(it) {
-				const t = it.title || it.displayTitle;
-				if (t && String(t).trim()) return String(t).trim();
-				if (it.cwd) return String(it.cwd).split(/[\\/]/).pop();
-				return "新会话";
-			}
-
-			async function refreshList() {
-				try {
-					const { result } = await connection.api.sessions.list({});
-					if (!result || !result.ok) return;
-					sessionsCache = (result.value && result.value.items) || [];
-					const snap = sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
-					currentId = (snap && snap.current) || null;
-					renderList();
-				} catch (e) {}
-			}
-
-			function renderList() {
-				listEl.textContent = "";
-				if (!sessionsCache.length) {
-					const empty = document.createElement("div");
-					empty.style.cssText = "padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary)";
-					empty.textContent = "暂无会话";
-					listEl.appendChild(empty);
-					return;
+			function rebind() {
+				const sid = currentSessionId();
+				if (sid === sessionId && binding) { rebuild(); return; }
+				sessionId = sid;
+				if (sid === null) { binding = null; userMsgs = []; renderAll(); return; }
+				try { binding = sessions.binding(sid); } catch (e) { binding = null; }
+				if (binding && binding.session && binding.session.subscribe) {
+					try { binding.session.subscribe(() => rebuild()); } catch (e) {}
 				}
-				const groups = { today: [], yesterday: [], earlier: [] };
-				for (const it of sessionsCache) {
-					const { g } = histLabel(typeof it.updatedAt === "number" ? it.updatedAt : Date.now());
-					groups[g].push(it);
-				}
-				let earlierOpen = false;
-				const groupMeta = [
-					{ key: "today", label: "今天" },
-					{ key: "yesterday", label: "昨天" },
-					{ key: "earlier", label: "更早", collapsible: true },
-				];
-				for (const meta of groupMeta) {
-					const items = groups[meta.key];
-					if (!items.length) continue;
-					const gTitle = document.createElement("div");
-					Object.assign(gTitle.style, {
-						padding: "6px 8px 2px", fontSize: "11px",
-						color: "var(--dsw-alias-label-tertiary)",
-						cursor: "default", userSelect: "none",
-					});
-					gTitle.textContent = meta.label;
-					if (meta.collapsible) {
-						gTitle.textContent += earlierOpen ? " ▾" : " ▸";
-						gTitle.style.cursor = "pointer";
-						gTitle.onclick = (e) => {
-							e.stopPropagation();
-							earlierOpen = !earlierOpen;
-							renderList();
-						};
-					}
-					listEl.appendChild(gTitle);
-					if (meta.key === "earlier" && !earlierOpen) continue;
-					for (const it of items) listEl.appendChild(buildItem(it));
-				}
+				rebuild();
 			}
 
-			function buildItem(it) {
-				const el = document.createElement("div");
-				const isCurrent = it.sessionId === currentId;
-				Object.assign(el.style, {
-					display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px",
-					padding: "7px 9px", borderRadius: "8px", cursor: "pointer",
-					marginBottom: "2px",
-					color: isCurrent ? "var(--dsw-alias-label-primary-foreground)" : "var(--dsw-alias-label-secondary)",
-					background: isCurrent ? "var(--dsw-alias-brand-primary)" : "transparent",
-					fontWeight: isCurrent ? "600" : "400",
-				});
-				const name = document.createElement("span");
-				name.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-				name.textContent = itemTitle(it);
-				name.title = name.textContent;
-				const tm = document.createElement("span");
-				tm.style.cssText = "flex:none;font-size:10px;opacity:.75";
-				const { t } = histLabel(typeof it.updatedAt === "number" ? it.updatedAt : Date.now());
-				tm.textContent = t;
-				el.appendChild(name);
-				el.appendChild(tm);
-
-				el.addEventListener("mouseenter", (e) => {
-					if (!isCurrent) el.style.background = "var(--dsw-alias-interactive-bg-hover)";
-					clearTimeout(hoverTimer);
-					hoverTimer = setTimeout(() => showHover(it.sessionId, el), 350);
-				});
-				el.addEventListener("mouseleave", () => {
-					if (!isCurrent) el.style.background = "transparent";
-					clearTimeout(hoverTimer);
-					hideHover();
-				});
-				el.addEventListener("click", () => {
-					if (it.sessionId === currentId) return;
-					try { sessions.open(it.sessionId); } catch (e) {}
-				});
-				return el;
+			function rebuild() {
+				if (!binding || !binding.session) { userMsgs = []; }
+				else {
+					try {
+						const snap = binding.session.getSnapshot();
+						userMsgs = collectUserMessages(snap);
+					} catch (e) { userMsgs = []; }
+				}
+				renderAll();
 			}
 
-			async function loadMyMessages(sessionId) {
-				if (msgCache.has(sessionId)) return msgCache.get(sessionId);
-				try {
-					const { result } = await connection.api.sessions.history({ sessionId });
-					if (!result || !result.ok) return [];
-					const msgs = [];
-					for (const entry of (result.value && result.value.events) || []) {
-						const ev = entry && (entry.event || entry);
-						if (!ev || ev.type !== "user/message") continue;
-						const dd = ev.data || {};
-						let text = dd.text;
-						if (typeof text !== "string" || !text.trim()) {
-							const msg = dd.message || {};
-							text = typeof msg.text === "string" ? msg.text : "";
+			function collectUserMessages(snap) {
+				const out = [];
+				const nodes = snap && snap.nodes;
+				if (!Array.isArray(nodes)) return out;
+				for (const node of nodes) {
+					if (node.kind !== "user" && node.kind !== "steering") continue;
+					const blocks = node.content || node.blocks || [];
+					let text = "";
+					for (const b of blocks) {
+						if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
+							text += b.text + "\n";
 						}
-						if (typeof text === "string" && text.trim()) msgs.push(text.trim());
 					}
-					msgCache.set(sessionId, msgs);
-					return msgs;
-				} catch (e) { return []; }
+					const t = text.trim().split("\n", 1)[0] || "";
+					if (t) out.push(t);
+				}
+				return out;
 			}
 
-			function positionHover(anchorEl) {
-				const r = anchorEl.getBoundingClientRect();
-				let left = r.right + 10;
-				let top = r.top;
-				if (left + 320 > window.innerWidth) left = r.left - 330;
-				if (top + 400 > window.innerHeight) top = Math.max(8, window.innerHeight - 420);
-				hover.style.left = left + "px";
-				hover.style.top = top + "px";
+			function renderAll() {
+				renderRail();
+				renderPanel();
 			}
 
-			function hideHover() {
-				hoverShown = null;
-				hover.style.display = "none";
+			function renderRail() {
+				rail.textContent = "";
+				const n = Math.min(userMsgs.length, 60);
+				for (let i = 0; i < n; i++) {
+					const bar = document.createElement("div");
+					Object.assign(bar.style, {
+						width: "14px", height: "2px", borderRadius: "1px",
+						background: "var(--dsw-alias-border-l3)",
+					});
+					bar.title = (i + 1) + ". " + (userMsgs[i] || "");
+					bar.addEventListener("click", () => scrollToMessage(i));
+					rail.appendChild(bar);
+				}
+				if (userMsgs.length > 60) {
+					const more = document.createElement("div");
+					more.style.cssText = "font-size:9px;color:var(--dsw-alias-label-tertiary)";
+					more.textContent = "+" + (userMsgs.length - 60);
+					rail.appendChild(more);
+				}
 			}
 
-			async function showHover(sessionId, anchorEl) {
-				hideHover();
-				hoverShown = sessionId;
-				hover.textContent = "加载中…";
-				hover.style.display = "block";
-				positionHover(anchorEl);
-				const msgs = await loadMyMessages(sessionId);
-				if (hoverShown !== sessionId) return; // 已移开
-				hover.textContent = "";
-				if (!msgs.length) {
-					hover.textContent = "（该会话暂无我的消息）";
+			function renderPanel() {
+				pList.textContent = "";
+				pCount.textContent = userMsgs.length ? String(userMsgs.length) + " 条" : "";
+				if (!userMsgs.length) {
+					const e = document.createElement("div");
+					e.style.cssText = "padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary)";
+					e.textContent = "暂无我的消息";
+					pList.appendChild(e);
 					return;
 				}
-				const cap = document.createElement("div");
-				cap.style.cssText = "font-size:11px;color:var(--dsw-alias-label-tertiary);margin-bottom:6px;font-weight:600";
-				cap.textContent = `我发送的消息（${msgs.length}）`;
-				hover.appendChild(cap);
-				for (const m of msgs) {
-					const line = document.createElement("div");
-					line.style.cssText = "margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--dsw-alias-border-l1);white-space:pre-wrap;word-break:break-word";
-					line.textContent = m.length > 200 ? m.slice(0, 200) + "…" : m;
-					hover.appendChild(line);
-				}
+				userMsgs.forEach((text, idx) => {
+					const row = document.createElement("div");
+					Object.assign(row.style, {
+						display: "flex", gap: "8px", padding: "6px 10px",
+						borderRadius: "8px", cursor: "pointer", alignItems: "baseline",
+					});
+					row.onmouseenter = () => { row.style.background = "var(--dsw-alias-interactive-bg-hover)"; };
+					row.onmouseleave = () => { row.style.background = "transparent"; };
+					const num = document.createElement("span");
+					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;color:var(--dsw-alias-label-tertiary);min-width:24px;text-align:right";
+					num.textContent = String(idx + 1);
+					const txt = document.createElement("span");
+					txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+					const short = text.length > 60 ? text.slice(0, 60) + "…" : text;
+					txt.textContent = short;
+					txt.title = text;
+					row.appendChild(num);
+					row.appendChild(txt);
+					row.addEventListener("click", () => scrollToMessage(idx));
+					pList.appendChild(row);
+				});
 			}
 
-			function toggle() {
-				if (panel.hidden) {
-					panel.hidden = false;
-					refreshList();
-					if (sessions.list && sessions.list.subscribe) {
-						try { sessions.list.subscribe(() => refreshList()); } catch (e) {}
-					}
+			// ---- DOM 定位（data-chat-flow-kind="user" 第 n 行 = 第 n 条我的消息） ----
+			function findChatRoot() {
+				return document.querySelector('[data-slot="conversation"]');
+			}
+			function findScrollContainer(root) {
+				const first = root.querySelector("[data-chat-flow-kind]");
+				let cur = first ? first.parentElement : null;
+				while (cur && cur !== document.body) {
+					const s = getComputedStyle(cur);
+					if (cur.scrollHeight > cur.clientHeight && /(auto|scroll|overlay)/.test(s.overflowY)) return cur;
+					cur = cur.parentElement;
+				}
+				return null;
+			}
+			function scrollToMessage(userIndex) {
+				const root = findChatRoot();
+				if (!root) return;
+				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
+				const el = rows[userIndex];
+				if (!el) return;
+				const container = findScrollContainer(root);
+				if (container) {
+					const cr = container.getBoundingClientRect();
+					const tr = el.getBoundingClientRect();
+					container.scrollTo({ top: container.scrollTop + tr.top - cr.top - 12 });
 				} else {
-					panel.hidden = true;
-					hideHover();
+					el.scrollIntoView({ block: "start" });
 				}
+				el.classList.add(OUTLINE_FLASH);
+				setTimeout(() => el.classList.remove(OUTLINE_FLASH), 1600);
 			}
 
-			dock.addEventListener("click", toggle);
-			closeBtn.addEventListener("click", () => { panel.hidden = true; hideHover(); });
-
-			// 点击外部收起
-			document.addEventListener("click", (e) => {
-				if (panel.hidden) return;
-				const t = e.target;
-				if (!t.closest) return;
-				if (t.closest("#" + HIST_PANEL_ID) || t.closest("#" + HIST_DOCK_ID)) return;
-				panel.hidden = true;
-				hideHover();
+			// ---- hover 展开 / 移出收起 ----
+			let hideTimer = null;
+			rail.addEventListener("mouseenter", () => {
+				clearTimeout(hideTimer);
+				rebuild();
+				panel.style.display = "flex";
 			});
+			panel.addEventListener("mouseenter", () => { clearTimeout(hideTimer); });
+			const hidePanel = () => {
+				hideTimer = setTimeout(() => { panel.style.display = "none"; }, 180);
+			};
+			rail.addEventListener("mouseleave", hidePanel);
+			panel.addEventListener("mouseleave", hidePanel);
 
-			// 面板打开时轮询刷新
-			setInterval(() => { if (!panel.hidden) refreshList(); }, 30000);
+			// ---- 数据刷新：会话切换订阅 + 轮询兜底 ----
+			if (sessions.list && sessions.list.subscribe) {
+				try { sessions.list.subscribe(() => rebind()); } catch (e) {}
+			}
+			rebind();
+			setInterval(rebind, 15000);
 
-			document.body.appendChild(dock);
+			// ---- 定位高亮动画样式 ----
+			if (!document.getElementById("dsh-msg-outline-style")) {
+				const st = document.createElement("style");
+				st.id = "dsh-msg-outline-style";
+				st.textContent = "." + OUTLINE_FLASH + "{animation:dshOutlineFlash 1.6s ease 1}"
+					+ "@keyframes dshOutlineFlash{0%,100%{background:transparent}15%,35%{background:rgba(255,200,0,.35)}}";
+				document.head.appendChild(st);
+			}
+
+			document.body.appendChild(rail);
 			document.body.appendChild(panel);
-			document.body.appendChild(hover);
 		}
 
-		exports.apply = apply;
+exports.apply = apply;
 		exports.inject = ["connection", "sessions"];
 		return module.exports;
 	}
