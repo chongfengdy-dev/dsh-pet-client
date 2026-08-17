@@ -1239,16 +1239,16 @@ window.__ModuleLoader__.load({
 				if (!text) return;
 				const root = findChatRoot();
 				if (!root) return;
-				// 文本匹配定位：DOM 的 user 行包含历史全部消息（快照只剩最近几条），
-				// 数组下标 ≠ DOM 全局行号，必须按首行文本匹配目标行再滚动。
+				// 文本匹配定位：DOM 的 user 行包含历史全部消息（快照/持久化记录只是其中一部分），
+				// 数组下标 ≠ DOM 全局行号，必须按文本匹配目标行。只用精确匹配（首行完全相等），
+				// 禁用包含匹配——否则会被"引用了本条文本的其他消息"抢先命中导致跳错
+				// （如点第1条跳到引用了第1条文本的第7条）。匹配不到=消息已被 compaction
+				// 清出对话区，物理上无法定位，不跳转。
 				const els = root.querySelectorAll('[data-chat-flow-kind="user"]');
 				let el = null;
 				for (const e of els) {
 					const t = (e.textContent || "").trim().split("\n", 1)[0] || "";
-					if (t === text || (text.length > 4 && t.indexOf(text) !== -1) || (text.length > 4 && text.indexOf(t) !== -1)) {
-						el = e;
-						break;
-					}
+					if (t === text) { el = e; break; }
 				}
 				if (!el) return;
 				const container = findScrollContainer(root);
