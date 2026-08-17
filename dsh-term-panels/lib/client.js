@@ -971,6 +971,9 @@ window.__ModuleLoader__.load({
 					for (const entry of events) {
 						const ev = entry && (entry.event || entry);
 						if (!ev || ev.type !== "user/message") continue;
+						// 只显示主本人提问（source.kind==="user"；排除 steering/plugin/compact 等非真人提问）
+						const srcKind = ev.data && ev.data.source && ev.data.source.kind;
+						if (srcKind !== undefined && srcKind !== "user") continue;
 						const dd = ev.data || {};
 						let text = "";
 						const content = dd.content || (dd.message && dd.message.content) || [];
@@ -1012,7 +1015,7 @@ window.__ModuleLoader__.load({
 				for (let i = 0; i < n; i++) {
 					const m = todayMsgs[i];
 					const row = document.createElement("div");
-					row.style.cssText = "display:flex;align-items:center;gap:8px;padding:0;border-radius:6px;cursor:pointer";
+					row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:18px;padding:0 4px;border-radius:6px;cursor:pointer";
 					const bar = document.createElement("div");
 					bar.style.cssText = "flex:none;width:16px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3)";
 					const num = document.createElement("span");
@@ -1088,7 +1091,7 @@ window.__ModuleLoader__.load({
 				if (!container) return;
 				try {
 					const r = container.getBoundingClientRect();
-					if (r.width > 0) box.style.left = Math.max(0, r.left - 34) + "px";
+					if (r.width > 0) box.style.left = Math.max(0, r.left + 4) + "px";
 				} catch (e) {}
 			}
 
