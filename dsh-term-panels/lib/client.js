@@ -975,22 +975,10 @@ window.__ModuleLoader__.load({
 			let sessionId = null;
 			let binding = null;      // { session: { getSnapshot, subscribe } }
 			let unsubscribe = null;  // 当前会话订阅退订函数（会话切换时释放）
-			let userMsgs = [];       // string[]（我的消息首行文本，快照全量同步）
+			let userMsgs = [];       // [{text, key}]（我的消息，key=官方锚点，快照全量同步）
 			let activeIdx = -1;      // 当前点击/选中的消息下标（-1=无，横杠+文字变蓝）
 			let rows = [];           // {row, bar, num, txt, idx} 行引用（颜色状态更新用）
 			let expanded = false;    // 是否展开（平时只显示横杠，hover 展开显示行号+文本）
-			const OUTLINE_HISTORY_URL = "http://127.0.0.1:3081/api/outline-history";
-
-			// 持久化：服务端文件（3081，跨重启保留——WebView2 localStorage 受缓存目录
-			// 影响不可靠，主定稿走服务端，关机也能找回来）。加载异步：先本地渲染已有，
-			// 服务端返回后补齐（防止重启后丢失）；保存节流，来一条写一条。
-			let loadTimer = null;
-			function loadStored(sid, cb) {
-				fetch(OUTLINE_HISTORY_URL + "?sessionId=" + encodeURIComponent(sid), { mode: "cors" })
-					.then((r) => r.json())
-					.then((data) => { cb(Array.isArray(data.list) ? data.list : []); })
-					.catch(() => { cb([]); });
-			}
 
 			function currentSessionId() {
 				const snap = sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
@@ -1011,50 +999,45 @@ window.__ModuleLoader__.load({
 					try { unsubscribe = binding.session.subscribe(onSessionEvent); } catch (e) {}
 				}
 				renderRows();
-				// 先显示服务端恢复的记录（启动即时可见），随后快照全量同步覆盖为真实全部
-				loadStored(sid, (list) => {
-					if (sid !== sessionId) return; // 已切走，忽略
-					if (!list.length) return;
-					let added = false;
-					for (const t of list) {
-						if (!t || userMsgs.includes(t)) continue;
-						userMsgs.push(t);
-						const r = buildRow(t, userMsgs.length - 1);
-						box.appendChild(r.row);
-						rows.push(r);
-						added = true;
-					}
-					if (added) { updateExpanded(expanded); applyActive(); }
-				});
-				// 快照全量同步（含全部历史，按时间序，覆盖服务端记录）
+				// 快照全量同步（含全部历史，按时间序；重启后对话区自动加载历史，快照=全部）
 				onSessionEvent();
 			}
 
-			// 快照全量同步（主定稿 2026-08-17）：快照 = 对话区已加载全部消息（时间序）。
-			// 每次订阅/DOM 变化：取快照全部 user 消息 → 整体替换列表（天然去重+时间排序，
-			// 含插件启用前的历史，全部可跳转）。hasMore=true 时循环 loadOlder 加载全部。
+			// 快照全量同步：快照 = 对话区已加载全部消息。用官方 chat.order（渲染顺序 key 列表）
+			// + chat.nodes（key→节点）：user 消息按 order 序收集 {text, key}，整体替换列表。
+			// key 是官方唯一锚点（DOM data-chat-anchor-key），跳转用 key 定位，零文本匹配。
 			function onSessionEvent() {
 				if (!binding || !binding.session) return;
-				let snapList = [];
+				let list = [];
 				let snapHasMore = false;
 				try {
 					const snap = binding.session.getSnapshot();
-					snapList = collectUserMessages(snap);
 					snapHasMore = !!(snap && snap.hasMore);
+					const chat = (snap && snap.chat) || null;
+					const order = chat && chat.order;
+					const nodes = chat && chat.nodes;
+					if (Array.isArray(order) && nodes && typeof nodes.get === "function") {
+						for (const key of order) {
+							const node = nodes.get(key);
+							if (!node || node.kind !== "user") continue;
+							const t = nodeTextOf(node);
+							if (!t) continue;
+							list.push({ text: t, key });
+						}
+					}
 				} catch (e) { return; }
-				// 整体替换（去重：跳过空文本；顺序 = 快照时间序）
+				// 整体替换（key 去重）
 				const next = [];
 				const seen = new Set();
-				for (const t of snapList) {
-					if (!t || seen.has(t)) continue;
-					seen.add(t);
-					next.push(t);
+				for (const m of list) {
+					if (seen.has(m.key)) continue;
+					seen.add(m.key);
+					next.push(m);
 				}
-				// 内容变化才重建 DOM
 				let changed = next.length !== userMsgs.length;
 				if (!changed) {
 					for (let i = 0; i < next.length; i++) {
-						if (next[i] !== userMsgs[i]) { changed = true; break; }
+						if (next[i].key !== userMsgs[i].key) { changed = true; break; }
 					}
 				}
 				if (changed) {
@@ -1066,52 +1049,26 @@ window.__ModuleLoader__.load({
 				if (snapHasMore) maybeLoadOlder();
 			}
 
-			// 文本 → DOM user 行号索引：数据/DOM 变化时重建（点击时 O(1) 查表，不遍历）
-			// 用官方 chat.order（渲染顺序 key 列表）+ chat.nodes（key→节点 Map）：
-			// 按 order 筛出 kind===user 的节点，第 i 个 user 节点 = DOM 第 i 个 user 行
-			// （DOM data-chat-anchor-key 顺序 = chat.order 顺序，官方渲染契约），
-			// 彻底不依赖 DOM 行数与快照节点数对齐（snap74/dom70 那种 MISMATCH 也正确）。
-			let rowMap = {};
-			let cachedEls = [];
+			// key → DOM 行索引：数据/DOM 变化时重建。key 是官方锚点（data-chat-anchor-key），
+			// 直接按属性查 DOM 行，零文本匹配、零数量对齐、零顺序假设——最可靠。
+			let keyMap = {};
 			let rowObserver = null;
 			let pendingTarget = null;   // 懒加载定位目标：点击后等待"加载更早"把目标加载进 DOM
 			let lastLoadClick = 0;      // 触发"加载更早"节流
 			let pendingTimer = null;    // 定位超时保护
 			function rebuildRowMap() {
-				rowMap = {};
+				keyMap = {};
 				const root = findChatRoot();
 				if (!root) return;
-				cachedEls = Array.from(root.querySelectorAll('[data-chat-flow-kind="user"]'));
-				// 官方顺序：chat.order 里 kind===user 的节点（快照文本作键，值=user 序号=DOM 行号）
-				try {
-					const snap = binding.session.getSnapshot();
-					const chat = (snap && snap.chat) || null;
-					const order = chat && chat.order;
-					const nodes = chat && chat.nodes;
-					if (Array.isArray(order) && nodes && typeof nodes.get === "function") {
-						let userIdx = 0;
-						for (const key of order) {
-							const node = nodes.get(key);
-							if (!node || node.kind !== "user") continue;
-							const t = nodeTextOf(node);
-							if (!t) continue;
-							if (cachedEls[userIdx]) rowMap[t] = userIdx;
-							userIdx++;
-						}
-					}
-				} catch (e) {}
-				// 兜底（order 不可用）：快照 nodes 顺序对齐 + DOM 文本匹配
-				if (!Object.keys(rowMap).length && cachedEls.length) {
-					cachedEls.forEach((e, i) => {
-						const full = (e.textContent || "").trim();
-						const first = full.split("\n", 1)[0] || "";
-						if (first) rowMap[first] = i;
-						if (full && full.length > first.length && full.length <= 200) rowMap[full] = i;
-					});
+				// 直接按官方 key 属性建索引：data-chat-anchor-key → 行元素
+				const els = root.querySelectorAll('[data-chat-anchor-key]');
+				for (const e of els) {
+					const k = e.getAttribute("data-chat-anchor-key");
+					if (k) keyMap[k] = e;
 				}
 				// 懒加载定位：目标刚被加载出来 → 立即定位
-				if (pendingTarget && rowMap[pendingTarget] !== undefined) {
-					const el = cachedEls[rowMap[pendingTarget]];
+				if (pendingTarget && keyMap[pendingTarget]) {
+					const el = keyMap[pendingTarget];
 					pendingTarget = null;
 					clearTimeout(pendingTimer);
 					if (el) jumpTo(el);
@@ -1165,57 +1122,6 @@ window.__ModuleLoader__.load({
 				rowObserver.observe(root, { childList: true, subtree: true });
 			}
 			let rebuildTimer = null;
-
-			function collectUserMessages(snap) {
-				const out = [];
-				const nodes = snap && snap.nodes;
-				if (!Array.isArray(nodes)) return out;
-				for (const node of nodes) {
-					if (node.kind !== "user") continue;
-					const blocks = node.content || node.blocks || [];
-					let text = "";
-					for (const b of blocks) {
-						if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
-							text += b.text + "\n";
-						}
-					}
-					const t = text.trim().split("\n", 1)[0] || "";
-					if (t) out.push(t);
-				}
-				return out;
-			}
-
-			// 追加一行记录（保留备用：单条 append 用）
-			function appendRow(text) {
-				userMsgs.push(text);
-				const r = buildRow(text, userMsgs.length - 1);
-				box.appendChild(r.row);
-				rows.push(r);
-				updateExpanded(expanded);
-				applyActive();
-			}
-
-			function collectUserMessages(snap) {
-				const out = [];
-				const nodes = snap && snap.nodes;
-				if (!Array.isArray(nodes)) return out;
-				for (const node of nodes) {
-					if (node.kind !== "user") continue;
-					const blocks = node.content || node.blocks || [];
-					let text = "";
-					for (const b of blocks) {
-						if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
-							text += b.text + "\n";
-						}
-					}
-					const t = text.trim().split("\n", 1)[0] || "";
-					if (t) out.push(t);
-				}
-				return out;
-			}
-
-			// 渲染全部行（展开时全部显示+滚动条；收起时只显示最近 10 条横杠，见 updateExpanded）
-			// 空状态（开会话还没收到新消息）：显示一条占位横杠，保证导航条可见可 hover，
 			// 占位条不算记录、点击不定位。
 			function renderRows() {
 				while (box.children.length) box.removeChild(box.lastChild);
@@ -1228,8 +1134,8 @@ window.__ModuleLoader__.load({
 					updateExpanded(expanded);
 					return;
 				}
-				userMsgs.forEach((text, i) => {
-					const r = buildRow(text, i);
+				userMsgs.forEach((m, i) => {
+					const r = buildRow(m, i);
 					box.appendChild(r.row);
 					rows.push(r);
 				});
@@ -1238,9 +1144,13 @@ window.__ModuleLoader__.load({
 			}
 
 			// 构建一行：横杠 + 行号 + 文本（同一行垂直对齐；hover 整行变黑，点击变蓝）
-			function buildRow(text, idx) {
+			// m = { text, key }；key 是官方锚点（data-chat-anchor-key），点击用 key 定位。
+			function buildRow(m, idx) {
+				const text = m && m.text ? m.text : String(m || "");
+				const key = m && m.key;
 				const row = document.createElement("div");
 				row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:20px;padding:0 4px;border-radius:6px;cursor:pointer;transition:background .12s ease";
+				if (key) row.dataset.msgKey = key;
 				const bar = document.createElement("div");
 				bar.style.cssText = "flex:none;width:14px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3);transition:background .12s ease";
 				const num = document.createElement("span");
@@ -1340,14 +1250,14 @@ window.__ModuleLoader__.load({
 			function scrollToMessage(userIndex) {
 				activeIdx = userIndex;
 				applyActive();
-				const text = userMsgs[userIndex];
-				if (!text) return;
-				// 索引查表定位（数据变化时已重建 rowMap）：O(1) 取 DOM 行号，不遍历。
-				const row = rowMap[text];
-				if (row !== undefined && cachedEls[row]) { jumpTo(cachedEls[row]); return; }
+				const m = userMsgs[userIndex];
+				if (!m) return;
+				const key = m.key;
+				// 官方 key 定位：keyMap 已按 data-chat-anchor-key 建好（数据/DOM 变化时重建）
+				if (key && keyMap[key]) { jumpTo(keyMap[key]); return; }
 				// 目标不在 DOM（对话区懒加载，"加载更早"的历史还没加载）：
-				// 设 pendingTarget，触发"加载更早"循环直到目标出现（rebuildRowMap 里续推）
-				pendingTarget = text;
+				// 设 pendingTarget（key），触发"加载更早"循环直到目标出现（rebuildRowMap 里续推）
+				pendingTarget = key;
 				clearTimeout(pendingTimer);
 				pendingTimer = setTimeout(() => { pendingTarget = null; }, 15000); // 15s 超时放弃
 				maybeLoadOlder();
