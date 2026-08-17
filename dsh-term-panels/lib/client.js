@@ -1026,22 +1026,15 @@ window.__ModuleLoader__.load({
 				return out;
 			}
 
-			// 渲染行：最多 10 条（最近 10 条，最新在下）；行 = 横杠+行号+文本（单元素）
+			// 渲染全部行（展开时全部显示+滚动条；收起时只显示最近 10 条横杠，见 updateExpanded）
 			function renderRows() {
 				while (box.children.length) box.removeChild(box.lastChild);
 				rows = [];
-				const start = Math.max(0, userMsgs.length - 10);
-				for (let i = start; i < userMsgs.length; i++) {
-					const r = buildRow(userMsgs[i], i);
+				userMsgs.forEach((text, i) => {
+					const r = buildRow(text, i);
 					box.appendChild(r.row);
 					rows.push(r);
-				}
-				if (userMsgs.length > 10) {
-					const more = document.createElement("div");
-					more.style.cssText = "font-size:10px;color:var(--dsw-alias-label-tertiary);padding:0 4px";
-					more.textContent = "+" + (userMsgs.length - 10);
-					box.appendChild(more);
-				}
+				});
 				updateExpanded(expanded);
 				applyActive();
 			}
@@ -1059,7 +1052,6 @@ window.__ModuleLoader__.load({
 				txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:none;color:var(--dsw-alias-label-secondary);font-size:14px";
 				const short = text.length > 60 ? text.slice(0, 60) + "…" : text;
 				txt.textContent = short;
-				txt.title = text;
 				row.appendChild(bar);
 				row.appendChild(num);
 				row.appendChild(txt);
@@ -1095,6 +1087,8 @@ window.__ModuleLoader__.load({
 			}
 
 			// ---- hover 展开 / 收起（同一元素：横杠列 ↔ 完整大纲；只切样式不重建） ----
+			// 收起：只显示最近 10 条的横杠（其余整行隐藏）；展开：全部行 bar+num+txt，
+			// 超过 box 高度出滚动条（maxHeight 70vh + overflowY auto）。
 			function updateExpanded(on) {
 				expanded = on;
 				box.style.background = on
@@ -1105,6 +1099,8 @@ window.__ModuleLoader__.load({
 				box.style.backdropFilter = on ? "blur(8px)" : "none";
 				box.style.width = on ? "320px" : "auto";
 				for (const r of rows) {
+					const recent = userMsgs.length - r.idx <= 10;   // 最近 10 条
+					r.row.style.display = (on || recent) ? "flex" : "none";
 					r.num.style.display = on ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
 				}
