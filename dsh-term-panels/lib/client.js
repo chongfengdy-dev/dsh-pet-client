@@ -901,17 +901,19 @@ window.__ModuleLoader__.load({
 		const OUTLINE_FLASH = "dsh-msg-outline-flash";
 
 		function buildMessageOutline(ctx) {
-			// 2026-08-17 主定稿（v6 基底重做）：
+			// 2026-08-17 主定稿（v7 基底重做，对齐 DeepSeek 网页版）：
 			// - 单元素设计：平时一列细横杠；hover 同一元素展开为完整大纲面板
 			//   （横杠+行号+文本同一行，天然垂直对齐；横杠在弹出面板内）；
 			// - 位置：一开始就在对话区滚动容器左内缘+4（初始隐藏，定位到才显示；
 			//   无 left 动画——v6 的 transition 导致"先出现在侧边栏内再滑过来"）；
-			// - 数据：session.history 事件流（user/message 带 time + data.content blocks），
-			//   只显示主本人提问（source.kind==="user"），拆「今天」/「今天之前」两组，
-			//   顶部折叠按钮展开今天之前的消息；每条记全局序号（DOM 定位用）；
-			// - 横杠颜色：页面所在消息=蓝（Scroll Spy，IntersectionObserver），
-			//   其余=灰，鼠标划过=黑，点击某行→变蓝并平滑滚动定位；
-			// - 样式：展开宽度减半（200px），与 Token HUB 同款半透明+模糊；
+			// - 数据：session.history 事件流（user/message 文本在 data.content blocks），
+			//   只显示主本人提问（source.kind==="user"），**不分今天/之前**（全部消息）；
+			//   横杠列最多生成 10 条（取最近 10 条，最新在最下），再多了 hover 展开的
+			//   面板显示全部消息、带滚动条上下查找（对齐 DeepSeek 网页版）；
+			// - 横杠颜色：页面所在消息=蓝（Scroll Spy，IntersectionObserver）+ 粗 50%，
+			//   其余=灰；鼠标划过整行变色（横杠变黑+行背景）；点击某行→变蓝并平滑滚动；
+			// - 初始蓝色=最后一条（刷新时页面在底部，最新消息的横杠蓝）；
+			// - 样式：展开宽度 400px（字体 12px），与 Token HUB 同款半透明+模糊；
 			// - 超长消息截断 + …，完整文本放 title。
 			if (document.getElementById(OUTLINE_RAIL_ID)) return; // 已注入
 
@@ -930,60 +932,50 @@ window.__ModuleLoader__.load({
 				cursor: "pointer",
 				transition: "background .15s ease, border-color .15s ease",
 				maxHeight: "70vh", overflowY: "auto",
-				fontSize: "10px",
+				fontSize: "12px",
 				visibility: "hidden", // 定位到对话区左缘前不显示
 			});
 
-			// 展开时标题（平时隐藏）+「今天之前」折叠按钮
+			// 展开时标题（平时隐藏）
 			const head = document.createElement("div");
 			Object.assign(head.style, {
 				display: "none", justifyContent: "space-between", alignItems: "center",
-				fontSize: "10px", color: "var(--dsw-alias-label-tertiary)",
+				fontSize: "11px", color: "var(--dsw-alias-label-tertiary)",
 				padding: "0 2px 4px", fontWeight: "600", whiteSpace: "nowrap",
 			});
 			const headTitle = document.createElement("span");
-			headTitle.textContent = "我的消息 · 今天";
-			const prevBtn = document.createElement("button");
-			prevBtn.style.cssText = "font-size:9px;color:var(--dsw-alias-label-secondary);background:transparent;border:none;cursor:pointer;padding:1px 4px;border-radius:4px;white-space:nowrap";
-			prevBtn.title = "展开/收起今天之前的消息";
+			headTitle.textContent = "我的消息";
+			const headCount = document.createElement("span");
+			headCount.style.cssText = "font-size:10px;color:var(--dsw-alias-label-tertiary)";
 			head.appendChild(headTitle);
-			head.appendChild(prevBtn);
+			head.appendChild(headCount);
 			box.appendChild(head);
 
 			// ---- 状态 ----
-			let todayMsgs = [];       // [{text, time, globalIdx}] 今天的我的消息
-			let prevMsgs = [];        // [{text, time, globalIdx}] 今天之前的我的消息
-			let rows = [];            // {row, bar, num, txt, globalIdx}（今天的行）
-			let prevRows = [];        // {row, bar, num, txt, globalIdx}（今天之前的行）
+			let msgs = [];            // [{text, time, globalIdx}] 全部我的消息（不分今天）
+			let rows = [];            // {row, bar, num, txt, globalIdx} 全部行引用
 			let sessionId = null;
 			let expanded = false;
-			let prevOpen = false;     // 「今天之前」折叠区是否展开
 			let activeGlobal = -1;    // 当前阅读位置的全局序号（-1=无）
 			let spyObserver = null;
 			let spyRoot = null;
-			let lastUserRows = -1;
 
-			function todayStartMs() {
-				const d = new Date();
-				d.setHours(0, 0, 0, 0);
-				return d.getTime();
-			}
 			function currentSessionId() {
 				const snap = sessions && sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
 				return snap && snap.current !== undefined ? snap.current : null;
 			}
 
 			// ---- 数据：history 事件流（user/message 文本在 data.content blocks） ----
-			// 只显示主本人提问（source.kind==="user"）；按今天 0 点拆「今天」/「今天之前」。
-			function loadToday() {
+			// 只显示主本人提问（source.kind==="user"）；**全部消息**（不分今天/之前）。
+			function loadMsgs() {
 				const sid = currentSessionId();
-				if (!sid) { todayMsgs = []; prevMsgs = []; renderRows(); return; }
+				if (!sid) { msgs = []; renderRows(); return; }
 				if (sid !== sessionId) {
 					sessionId = sid;
 					if (sessions && sessions.binding) {
 						try {
 							const b = sessions.binding(sid);
-							if (b && b.session && b.session.subscribe) b.session.subscribe(() => loadToday());
+							if (b && b.session && b.session.subscribe) b.session.subscribe(() => loadMsgs());
 						} catch (e) {}
 					}
 				}
@@ -991,7 +983,6 @@ window.__ModuleLoader__.load({
 				connection.api.sessions.history({ sessionId: sid }).then((r) => {
 					const events = r && r.result && r.result.ok ? ((r.result.value && r.result.value.events) || []) : [];
 					const all = [];
-					const start = todayStartMs();
 					for (const entry of events) {
 						const ev = entry && (entry.event || entry);
 						if (!ev || ev.type !== "user/message") continue;
@@ -1015,8 +1006,9 @@ window.__ModuleLoader__.load({
 						const g = all.length;
 						all.push({ text, time: ev.time || 0, globalIdx: g });
 					}
-					todayMsgs = all.filter((m) => m.time >= start);
-					prevMsgs = all.filter((m) => m.time < start);
+					msgs = all;
+					// 初始蓝色 = 最后一条（最新；刷新时页面在底部，最底下横杠应蓝）
+					if (msgs.length) setActive(msgs[msgs.length - 1].globalIdx);
 					renderRows();
 					ensureSpy();
 				}).catch(() => {});
@@ -1026,113 +1018,96 @@ window.__ModuleLoader__.load({
 				// 保留 head（第一个子节点），清空其余行
 				while (box.children.length > 1) box.removeChild(box.lastChild);
 				rows = [];
-				prevRows = [];
-				// 「今天之前」折叠按钮文字（显隐由 updateExpanded 统一控制）
-				prevBtn.textContent = "今天之前(" + prevMsgs.length + ")" + (prevOpen ? " ▾" : " ▸");
-				// 今天的消息
-				if (!todayMsgs.length) {
+				headCount.textContent = msgs.length ? String(msgs.length) + " 条" : "";
+				const showHead = expanded && msgs.length > 0;
+				head.style.display = showHead ? "flex" : "none";
+				if (!msgs.length) {
 					if (expanded) {
 						const e = document.createElement("div");
-						e.style.cssText = "padding:4px 2px;color:var(--dsw-alias-label-tertiary);font-size:10px";
-						e.textContent = "今天还没有我的消息";
+						e.style.cssText = "padding:4px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px";
+						e.textContent = "暂无我的消息";
 						box.appendChild(e);
 					}
-				} else {
-					const n = Math.min(todayMsgs.length, 60);
-					for (let i = 0; i < n; i++) {
-						const m = todayMsgs[i];
-						const r = buildRow(m, i);
-						box.appendChild(r.row);
-						rows.push(r);
-					}
-					if (todayMsgs.length > 60) {
-						const more = document.createElement("div");
-						more.style.cssText = "font-size:9px;color:var(--dsw-alias-label-tertiary);padding:0 4px";
-						more.textContent = "+" + (todayMsgs.length - 60);
-						box.appendChild(more);
-					}
+					return;
 				}
-				// 今天之前的消息（默认折叠，点击顶部按钮展开）
-				if (expanded && prevOpen && prevMsgs.length) {
-					prevMsgs.forEach((m, i) => {
-						const r = buildRow(m, i, true);
-						box.appendChild(r.row);
-						prevRows.push(r);
-					});
-				}
+				// 全部消息行（展开面板显示全部，滚动条上下查找）
+				msgs.forEach((m, i) => {
+					const r = buildRow(m, i);
+					box.appendChild(r.row);
+					rows.push(r);
+				});
 				updateExpanded(expanded);
 				applyActive();
 			}
 
-			// 构建一行：横杠 + 行号 + 文本（横杠颜色状态机：active 蓝 / 其余灰 / hover 黑）
-			function buildRow(m, idx, isPrev) {
+			// 构建一行：横杠 + 行号 + 文本
+			// 横杠颜色状态机：active 蓝+粗50%（3px）/ 其余灰（2px）/ hover 黑；
+			// hover 整行变色（横杠变黑 + 行背景），文字区域也触发。
+			function buildRow(m, idx) {
 				const row = document.createElement("div");
-				row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:18px;padding:0 4px;border-radius:6px;cursor:pointer";
+				row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:18px;padding:0 4px;border-radius:6px;cursor:pointer;transition:background .12s ease";
 				const bar = document.createElement("div");
-				bar.style.cssText = "flex:none;width:16px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3);transition:background .12s ease";
+				bar.style.cssText = "flex:none;width:12px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3);transition:background .12s ease, height .12s ease";
 				const num = document.createElement("span");
-				num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:9px;min-width:20px;text-align:right;color:var(--dsw-alias-label-tertiary);display:none";
+				num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;min-width:22px;text-align:right;color:var(--dsw-alias-label-tertiary);display:none";
 				num.textContent = String(idx + 1);
 				const txt = document.createElement("span");
-				txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:none;color:var(--dsw-alias-label-secondary);font-size:10px";
+				txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:none;color:var(--dsw-alias-label-secondary);font-size:12px";
 				const short = m.text.length > 60 ? m.text.slice(0, 60) + "…" : m.text;
 				txt.textContent = short;
 				txt.title = m.text;
 				row.appendChild(bar);
 				row.appendChild(num);
 				row.appendChild(txt);
-				// 鼠标划过横杠变黑
-				bar.addEventListener("mouseenter", () => { bar.style.background = "var(--dsw-alias-label-primary)"; });
-				bar.addEventListener("mouseleave", () => applyActive());
+				// hover 整行变色（横杠变黑 + 行背景；文字区域也触发）
+				row.addEventListener("mouseenter", () => {
+					bar.style.background = "var(--dsw-alias-label-primary)";
+					row.style.background = "var(--dsw-alias-interactive-bg-hover)";
+				});
+				row.addEventListener("mouseleave", () => {
+					row.style.background = "transparent";
+					applyActive();
+				});
 				row.addEventListener("click", () => { setActive(m.globalIdx); scrollToMessage(m.globalIdx); });
-				return { row, bar, num, txt, globalIdx: m.globalIdx };
+				return { row, bar, num, txt, globalIdx: m.globalIdx, idx };
 			}
 
-			// ---- 横杠颜色状态：页面所在消息（Scroll Spy）蓝，其余灰 ----
+			// ---- 横杠颜色状态：页面所在消息（Scroll Spy）蓝+粗，其余灰 ----
 			function setActive(globalIdx) {
 				if (globalIdx === activeGlobal) return;
 				activeGlobal = globalIdx;
 				applyActive();
 			}
 			function applyActive() {
-				applyActiveOn(rows);
-				applyActiveOn(prevRows);
-			}
-			function applyActiveOn(list) {
-				for (const r of list) {
-					r.bar.style.background = r.globalIdx === activeGlobal
+				for (const r of rows) {
+					const on = r.globalIdx === activeGlobal;
+					r.bar.style.background = on
 						? "var(--dsw-alias-state-business-primary)"   // 页面所在 = 蓝
 						: "var(--dsw-alias-border-l3)";               // 其余 = 灰
+					r.bar.style.height = on ? "3px" : "2px";          // 蓝色粗 50%
 				}
 			}
 
 			// ---- hover 展开 / 收起（同一元素：横杠列 ↔ 完整大纲） ----
+			// 收起：只显示最近 10 条消息的横杠（其余整行隐藏）；展开：全部消息 bar+num+txt
 			function updateExpanded(on) {
 				expanded = on;
-				// 展开：宽度减半（200px）+ 与 Token HUB 同款半透明+模糊；收起：透明细列
-				box.style.width = on ? "200px" : "auto";
+				// 展开：宽度 400px + 与 Token HUB 同款半透明+模糊；收起：透明细列
+				box.style.width = on ? "400px" : "auto";
 				box.style.background = on ? "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)" : "transparent";
 				box.style.borderColor = on ? "var(--dsw-alias-border-l2)" : "transparent";
 				box.style.boxShadow = on ? "0 4px 16px rgba(0,0,0,.22)" : "none";
 				box.style.backdropFilter = on ? "blur(4px)" : "none";
-				head.style.display = (on && (todayMsgs.length > 0 || prevMsgs.length > 0)) ? "flex" : "none";
-				prevBtn.style.display = (on && prevMsgs.length > 0) ? "" : "none";
+				head.style.display = (on && msgs.length > 0) ? "flex" : "none";
 				for (const r of rows) {
-					r.num.style.display = on ? "" : "none";
-					r.txt.style.display = on ? "" : "none";
-				}
-				for (const r of prevRows) {
+					const recent = msgs.length - r.idx <= 10;   // 最近 10 条
+					r.row.style.display = (on || recent) ? "flex" : "none";
 					r.num.style.display = on ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
 				}
 			}
 			box.addEventListener("mouseenter", () => { updateExpanded(true); renderRows(); });
-			box.addEventListener("mouseleave", () => { updateExpanded(false); prevOpen = false; renderRows(); });
-			prevBtn.addEventListener("click", (e) => {
-				e.stopPropagation();
-				prevOpen = !prevOpen;
-				renderRows();
-			});
+			box.addEventListener("mouseleave", () => { updateExpanded(false); renderRows(); });
 
 			// ---- 点击：平滑滚动定位（globalIdx 定位 DOM 第 n 条 user 行） ----
 			function findChatRoot() {
@@ -1201,12 +1176,12 @@ window.__ModuleLoader__.load({
 
 			// ---- 刷新 ----
 			if (sessions && sessions.list && sessions.list.subscribe) {
-				try { sessions.list.subscribe(() => loadToday()); } catch (e) {}
+				try { sessions.list.subscribe(() => loadMsgs()); } catch (e) {}
 			}
-			loadToday();
+			loadMsgs();
 			placeBox();
 			ensureSpy();
-			setInterval(() => { loadToday(); placeBox(); ensureSpy(); }, 5000);
+			setInterval(() => { loadMsgs(); placeBox(); ensureSpy(); }, 5000);
 			setInterval(placeBox, 1000);
 
 			document.body.appendChild(box);
