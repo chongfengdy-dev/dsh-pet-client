@@ -961,7 +961,7 @@ window.__ModuleLoader__.load({
 			Object.assign(box.style, {
 				position: "fixed", left: "0", top: "50%",
 				transform: "translateY(-50%)", zIndex: "99989",
-				display: "flex", flexDirection: "column", gap: "0",
+				display: "flex", flexDirection: "column", gap: "5px",
 				padding: "6px", borderRadius: "10px",
 				background: "transparent", border: "1px solid transparent",
 				cursor: "pointer",
@@ -1046,13 +1046,6 @@ window.__ModuleLoader__.load({
 					renderRows();
 				}
 				rebuildRowMap();
-				// 加载历史期间隐藏行号（避免序号整体跳动），加载完成再显示
-				if (snapHasMore) {
-					setNumVisible(false);
-				} else {
-					updateNumbers();
-					setNumVisible(true);
-				}
 				// 还有更早历史 → 继续加载（loadOlder 分页；DOM 变化会再触发 sync）
 				if (snapHasMore) maybeLoadOlder();
 			}
@@ -1133,11 +1126,9 @@ window.__ModuleLoader__.load({
 			let rebuildTimer = null;
 			// 占位条不算记录、点击不定位。
 			function renderRows() {
-				// 增量同步：对比新旧列表，顶部新增（加载更早）prepend、底部新增（新消息）append，
-				// 已渲染行不重建——序号稳定不跳（倒序：最新=1，序号从底部往上递增）。
+				while (box.children.length) box.removeChild(box.lastChild);
+				rows = [];
 				if (!userMsgs.length) {
-					while (box.children.length) box.removeChild(box.lastChild);
-					rows = [];
 					const ph = document.createElement("div");
 					ph.style.cssText = "flex:none;width:14px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3);opacity:.5;margin:0 4px";
 					ph.title = "我的消息（等待新消息…）";
@@ -1145,66 +1136,13 @@ window.__ModuleLoader__.load({
 					updateExpanded(expanded);
 					return;
 				}
-				// 找出已渲染行的 key 集合
-				const renderedKeys = new Set(rows.map((r) => r.key));
-				// 顶部新增（更早历史，prepend）
-				let prependCount = 0;
-				for (let i = 0; i < userMsgs.length; i++) {
-					if (renderedKeys.has(userMsgs[i].key)) break;
-					prependCount++;
-				}
-				if (prependCount > 0) {
-					const frag = document.createDocumentFragment();
-					for (let i = 0; i < prependCount; i++) {
-						const r = buildRow(userMsgs[i], i);
-						frag.appendChild(r.row);
-						rows.unshift(r);
-					}
-					box.insertBefore(frag, box.firstChild);
-				}
-				// 底部新增（新消息，append）
-				const renderedKeys2 = new Set(rows.map((r) => r.key));
-				for (let i = 0; i < userMsgs.length; i++) {
-					if (renderedKeys2.has(userMsgs[i].key)) continue;
-					// 该 key 未渲染 → 找它应插入的位置（按序）
-					const r = buildRow(userMsgs[i], i);
-					rows.push(r);
+				userMsgs.forEach((m, i) => {
+					const r = buildRow(m, i);
 					box.appendChild(r.row);
-					renderedKeys2.add(userMsgs[i].key);
-				}
-				// 行序修正：若 append 乱序则重排（罕见）
-				if (rows.length !== userMsgs.length) {
-					while (box.children.length) box.removeChild(box.lastChild);
-					rows = [];
-					userMsgs.forEach((m, i) => {
-						const r = buildRow(m, i);
-						box.appendChild(r.row);
-						rows.push(r);
-					});
-				}
-				// 重排序号（正序：最早=1，越新越大）——加载历史期间由 setNumVisible 隐藏
-				updateNumbers();
+					rows.push(r);
+				});
 				updateExpanded(expanded);
-				if (numHidden) setNumVisible(false);   // 保持加载中的隐藏态
 				applyActive();
-			}
-
-			// 更新所有行的序号（正序：最早=1，越新越大）
-			function updateNumbers() {
-				for (const r of rows) {
-					const idx = userMsgs.findIndex((m) => m.key === r.key);
-					if (idx >= 0) r.num.textContent = String(idx + 1);
-				}
-			}
-
-			// 加载历史期间隐藏行号（序号会在 prepend 后整体变化，避免跳动），
-			// 加载完成（hasMore=false）后统一显示。新消息 append 不影响旧序号，可即时显示。
-			let numHidden = false;
-			function setNumVisible(visible) {
-				numHidden = !visible;
-				for (const r of rows) {
-					r.num.style.display = visible ? "" : "none";
-				}
 			}
 
 			// 构建一行：横杠 + 行号 + 文本（同一行垂直对齐；hover 整行变黑，点击变蓝）
@@ -1213,7 +1151,7 @@ window.__ModuleLoader__.load({
 				const text = m && m.text ? m.text : String(m || "");
 				const key = m && m.key;
 				const row = document.createElement("div");
-				row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:20px;padding:2px 4px;border-radius:6px;cursor:pointer;transition:background .12s ease";
+				row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:20px;padding:0 4px;border-radius:6px;cursor:pointer;transition:background .12s ease";
 				if (key) row.dataset.msgKey = key;
 				const bar = document.createElement("div");
 				bar.style.cssText = "flex:none;width:14px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3);transition:background .12s ease";
@@ -1239,7 +1177,7 @@ window.__ModuleLoader__.load({
 					applyActive();
 				});
 				row.addEventListener("click", () => scrollToMessage(idx));
-				return { row, bar, num, txt, idx, key };
+				return { row, bar, num, txt, idx };
 			}
 
 			// 颜色状态：点击选中 = 蓝（横杠+文字），其余 = 灰
@@ -1274,7 +1212,7 @@ window.__ModuleLoader__.load({
 				for (const r of rows) {
 					const recent = userMsgs.length - r.idx <= 10;   // 最近 10 条
 					r.row.style.display = (on || recent) ? "flex" : "none";
-					// num 显隐由 setNumVisible 统一控制（加载历史期间隐藏）
+					r.num.style.display = on ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
 				}
 			}
