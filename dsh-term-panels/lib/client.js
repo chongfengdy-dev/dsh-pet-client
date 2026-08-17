@@ -951,7 +951,6 @@ window.__ModuleLoader__.load({
 		const OUTLINE_FLASH = "dsh-msg-outline-flash";
 
 		function buildMessageOutline(ctx) {
-			const connection = ctx.connection;
 			const sessions = ctx.sessions || (ctx.get ? ctx.get("sessions") : undefined);
 			if (!sessions) return;
 			if (document.getElementById(OUTLINE_RAIL_ID)) return; // 已注入
@@ -975,68 +974,56 @@ window.__ModuleLoader__.load({
 			// ---- 状态 ----
 			let sessionId = null;
 			let binding = null;      // { session: { getSnapshot, subscribe } }
-			let userMsgs = [];       // string[]（我的消息首行文本，全量历史）
+			let userMsgs = [];       // string[]（我的消息首行文本）
 			let activeIdx = -1;      // 当前点击/选中的消息下标（-1=无，横杠+文字变蓝）
 			let rows = [];           // {row, bar, num, txt, idx} 行引用（颜色状态更新用）
 			let expanded = false;    // 是否展开（平时只显示横杠，hover 展开显示行号+文本）
-			let lastSeq = -1;        // 最近一次加载到的最新事件 seq（无变化快速跳过）
 
 			function currentSessionId() {
 				const snap = sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
 				return snap && snap.current !== undefined ? snap.current : null;
 			}
 
-			// 数据源：session.history 事件流（全量、含压缩前消息——binding 快照会被
-			// compaction 修剪只剩最近几条，看不全历史）。一次请求 maxMessages 500 不翻页
-			// （避免 v7-v9 分页全量拉取的卡顿），订阅驱动来新消息才重拉。
 			function rebind() {
 				const sid = currentSessionId();
-				if (sid === null) { userMsgs = []; renderRows(); return; }
-				if (sid !== sessionId) {
-					sessionId = sid;
-					if (sessions && sessions.binding) {
-						try {
-							const b = sessions.binding(sid);
-							if (b && b.session && b.session.subscribe) b.session.subscribe(() => rebind());
-						} catch (e) {}
-					}
+				if (sid === sessionId && binding) { rebuild(); return; }
+				sessionId = sid;
+				if (sid === null) { binding = null; userMsgs = []; renderRows(); return; }
+				try { binding = sessions.binding(sid); } catch (e) { binding = null; }
+				if (binding && binding.session && binding.session.subscribe) {
+					try { binding.session.subscribe(() => rebuild()); } catch (e) {}
 				}
-				if (!connection || !connection.api || !connection.api.sessions || !connection.api.sessions.history) return;
-				connection.api.sessions.history({ sessionId: sid, maxMessages: 500 }).then((r) => {
-					const events = r && r.result && r.result.ok ? ((r.result.value && r.result.value.events) || []) : [];
-					// 无变化快速跳过（比对最新事件 seq，避免无谓重渲染）
-					if (events.length) {
-						const lastEntry = events[events.length - 1];
-						const lastEv = lastEntry && (lastEntry.event || lastEntry);
-						const newestSeq = lastEv && lastEv.seq;
-						if (newestSeq !== undefined && newestSeq === lastSeq && userMsgs.length) return;
-						lastSeq = newestSeq;
-					}
-					const out = [];
-					for (const entry of events) {
-						const ev = entry && (entry.event || entry);
-						if (!ev || ev.type !== "user/message") continue;
-						// 只显示主本人提问（source.kind==="user"；排除 steering/plugin 等非真人提问）
-						const srcKind = ev.data && ev.data.source && ev.data.source.kind;
-						if (srcKind !== undefined && srcKind !== "user") continue;
-						const dd = ev.data || {};
-						let text = "";
-						const content = dd.content || (dd.message && dd.message.content) || [];
-						if (Array.isArray(content)) {
-							for (const b of content) {
-								if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
-									text += b.text + "\n";
-								}
-							}
-						} else if (typeof dd.text === "string") {
-							text = dd.text;
+				rebuild();
+			}
+
+			function rebuild() {
+				if (!binding || !binding.session) { userMsgs = []; }
+				else {
+					try {
+						const snap = binding.session.getSnapshot();
+						userMsgs = collectUserMessages(snap);
+					} catch (e) { userMsgs = []; }
+				}
+				renderRows();
+			}
+
+			function collectUserMessages(snap) {
+				const out = [];
+				const nodes = snap && snap.nodes;
+				if (!Array.isArray(nodes)) return out;
+				for (const node of nodes) {
+					if (node.kind !== "user" && node.kind !== "steering") continue;
+					const blocks = node.content || node.blocks || [];
+					let text = "";
+					for (const b of blocks) {
+						if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
+							text += b.text + "\n";
 						}
-						const t = text.trim().split("\n", 1)[0] || "";
-						if (t) out.push(t);
 					}
-					userMsgs = out;
-					renderRows();
-				}).catch(() => {});
+					const t = text.trim().split("\n", 1)[0] || "";
+					if (t) out.push(t);
+				}
+				return out;
 			}
 
 			// 渲染全部行（展开时全部显示+滚动条；收起时只显示最近 10 条横杠，见 updateExpanded）
@@ -1100,8 +1087,8 @@ window.__ModuleLoader__.load({
 			}
 
 			// ---- hover 展开 / 收起（同一元素：横杠列 ↔ 完整大纲；只切样式不重建） ----
-			// 收起：只显示最近 10 条的横杠（其余整行隐藏）；
-			// 展开：全部行 bar+num+txt，可视高度约 10 行（300px），超过出滚动条拖动找之前的。
+			// 收起：只显示最近 10 条的横杠（其余整行隐藏）；展开：全部行 bar+num+txt，
+			// 超过 box 高度出滚动条（maxHeight 70vh + overflowY auto）。
 			function updateExpanded(on) {
 				expanded = on;
 				box.style.background = on
@@ -1111,7 +1098,6 @@ window.__ModuleLoader__.load({
 				box.style.boxShadow = on ? "0 8px 24px rgba(0,0,0,.25)" : "none";
 				box.style.backdropFilter = on ? "blur(8px)" : "none";
 				box.style.width = on ? "320px" : "auto";
-				box.style.maxHeight = on ? "300px" : "70vh";
 				for (const r of rows) {
 					const recent = userMsgs.length - r.idx <= 10;   // 最近 10 条
 					r.row.style.display = (on || recent) ? "flex" : "none";
