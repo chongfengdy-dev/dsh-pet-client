@@ -1103,6 +1103,10 @@ window.__ModuleLoader__.load({
 						if (full && full.length > first.length && full.length <= 200) rowMap[full] = i;
 					});
 				}
+				// 诊断：窗口标题显示数量（主排查用，可删）
+				try {
+					document.title = "outline snap=" + snapTexts.length + " dom=" + cachedEls.length + (snapTexts.length === cachedEls.length ? " ALIGN" : " MISMATCH");
+				} catch (e) {}
 				// 懒加载定位：目标刚被加载出来 → 立即定位
 				if (pendingTarget && rowMap[pendingTarget] !== undefined) {
 					const el = cachedEls[rowMap[pendingTarget]];
