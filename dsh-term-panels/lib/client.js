@@ -900,14 +900,18 @@ window.__ModuleLoader__.load({
 		const OUTLINE_PANEL_ID = "dsh-msg-outline-panel";
 		const OUTLINE_FLASH = "dsh-msg-outline-flash";
 
-						function buildMessageOutline(ctx) {
-			// 2026-08-17 v5（主定稿方向）：
-			// - 单元素设计：平时显示一列细横杠；hover 同一元素展开为完整大纲面板
-			//   （横杠 + 行号 + 文本在同一行内，天然垂直对齐；横杠在弹出面板内）；
-			// - 位置：对话区滚动容器左外侧（侧边栏右外侧、对话区左侧，不在侧边栏里）；
-			// - 数据：session.history 事件流（user/message 带 time 毫秒 + data.content blocks），
-			//   只显示今天的消息，每条记全局序号（对话区 DOM 含历史全部 user 行，定位用）；
-			// - 点击：平滑滚动定位（无滚动高亮，主定稿去掉）；
+		function buildMessageOutline(ctx) {
+			// 2026-08-17 主定稿（v6 基底重做）：
+			// - 单元素设计：平时一列细横杠；hover 同一元素展开为完整大纲面板
+			//   （横杠+行号+文本同一行，天然垂直对齐；横杠在弹出面板内）；
+			// - 位置：一开始就在对话区滚动容器左内缘+4（初始隐藏，定位到才显示；
+			//   无 left 动画——v6 的 transition 导致"先出现在侧边栏内再滑过来"）；
+			// - 数据：session.history 事件流（user/message 带 time + data.content blocks），
+			//   只显示主本人提问（source.kind==="user"），拆「今天」/「今天之前」两组，
+			//   顶部折叠按钮展开今天之前的消息；每条记全局序号（DOM 定位用）；
+			// - 横杠颜色：页面所在消息=蓝（Scroll Spy，IntersectionObserver），
+			//   其余=灰，鼠标划过=黑，点击某行→变蓝并平滑滚动定位；
+			// - 样式：展开宽度减半（200px），与 Token HUB 同款半透明+模糊；
 			// - 超长消息截断 + …，完整文本放 title。
 			if (document.getElementById(OUTLINE_RAIL_ID)) return; // 已注入
 
@@ -920,25 +924,44 @@ window.__ModuleLoader__.load({
 			Object.assign(box.style, {
 				position: "fixed", left: "0", top: "50%",
 				transform: "translateY(-50%)", zIndex: "99990",
-				display: "flex", flexDirection: "column", gap: "10px",
-				padding: "8px", borderRadius: "10px",
+				display: "flex", flexDirection: "column", gap: "6px",
+				padding: "6px", borderRadius: "10px",
 				background: "transparent", border: "1px solid transparent",
 				cursor: "pointer",
-				transition: "left .2s ease, background .15s ease, border-color .15s ease",
+				transition: "background .15s ease, border-color .15s ease",
 				maxHeight: "70vh", overflowY: "auto",
+				fontSize: "10px",
+				visibility: "hidden", // 定位到对话区左缘前不显示
 			});
 
-			// 展开时标题（平时隐藏）
+			// 展开时标题（平时隐藏）+「今天之前」折叠按钮
 			const head = document.createElement("div");
-			head.style.cssText = "font-size:11px;color:var(--dsw-alias-label-tertiary);padding:0 2px 2px;display:none;font-weight:600";
-			head.textContent = "我的消息 · 今天";
+			Object.assign(head.style, {
+				display: "none", justifyContent: "space-between", alignItems: "center",
+				fontSize: "10px", color: "var(--dsw-alias-label-tertiary)",
+				padding: "0 2px 4px", fontWeight: "600", whiteSpace: "nowrap",
+			});
+			const headTitle = document.createElement("span");
+			headTitle.textContent = "我的消息 · 今天";
+			const prevBtn = document.createElement("button");
+			prevBtn.style.cssText = "font-size:9px;color:var(--dsw-alias-label-secondary);background:transparent;border:none;cursor:pointer;padding:1px 4px;border-radius:4px;white-space:nowrap";
+			prevBtn.title = "展开/收起今天之前的消息";
+			head.appendChild(headTitle);
+			head.appendChild(prevBtn);
 			box.appendChild(head);
 
 			// ---- 状态 ----
-			let todayMsgs = [];       // [{text, globalIdx}] 今天的我的消息
-			let rows = [];            // {bar, num, txt}
+			let todayMsgs = [];       // [{text, time, globalIdx}] 今天的我的消息
+			let prevMsgs = [];        // [{text, time, globalIdx}] 今天之前的我的消息
+			let rows = [];            // {row, bar, num, txt, globalIdx}（今天的行）
+			let prevRows = [];        // {row, bar, num, txt, globalIdx}（今天之前的行）
 			let sessionId = null;
 			let expanded = false;
+			let prevOpen = false;     // 「今天之前」折叠区是否展开
+			let activeGlobal = -1;    // 当前阅读位置的全局序号（-1=无）
+			let spyObserver = null;
+			let spyRoot = null;
+			let lastUserRows = -1;
 
 			function todayStartMs() {
 				const d = new Date();
@@ -951,9 +974,10 @@ window.__ModuleLoader__.load({
 			}
 
 			// ---- 数据：history 事件流（user/message 文本在 data.content blocks） ----
+			// 只显示主本人提问（source.kind==="user"）；按今天 0 点拆「今天」/「今天之前」。
 			function loadToday() {
 				const sid = currentSessionId();
-				if (!sid) { todayMsgs = []; renderRows(); return; }
+				if (!sid) { todayMsgs = []; prevMsgs = []; renderRows(); return; }
 				if (sid !== sessionId) {
 					sessionId = sid;
 					if (sessions && sessions.binding) {
@@ -992,7 +1016,9 @@ window.__ModuleLoader__.load({
 						all.push({ text, time: ev.time || 0, globalIdx: g });
 					}
 					todayMsgs = all.filter((m) => m.time >= start);
+					prevMsgs = all.filter((m) => m.time < start);
 					renderRows();
+					ensureSpy();
 				}).catch(() => {});
 			}
 
@@ -1000,59 +1026,115 @@ window.__ModuleLoader__.load({
 				// 保留 head（第一个子节点），清空其余行
 				while (box.children.length > 1) box.removeChild(box.lastChild);
 				rows = [];
-				const showHead = expanded && todayMsgs.length > 0;
-				head.style.display = showHead ? "" : "none";
+				prevRows = [];
+				// 「今天之前」折叠按钮文字（显隐由 updateExpanded 统一控制）
+				prevBtn.textContent = "今天之前(" + prevMsgs.length + ")" + (prevOpen ? " ▾" : " ▸");
+				// 今天的消息
 				if (!todayMsgs.length) {
 					if (expanded) {
 						const e = document.createElement("div");
-						e.style.cssText = "padding:4px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px";
+						e.style.cssText = "padding:4px 2px;color:var(--dsw-alias-label-tertiary);font-size:10px";
 						e.textContent = "今天还没有我的消息";
 						box.appendChild(e);
 					}
-					return;
+				} else {
+					const n = Math.min(todayMsgs.length, 60);
+					for (let i = 0; i < n; i++) {
+						const m = todayMsgs[i];
+						const r = buildRow(m, i);
+						box.appendChild(r.row);
+						rows.push(r);
+					}
+					if (todayMsgs.length > 60) {
+						const more = document.createElement("div");
+						more.style.cssText = "font-size:9px;color:var(--dsw-alias-label-tertiary);padding:0 4px";
+						more.textContent = "+" + (todayMsgs.length - 60);
+						box.appendChild(more);
+					}
 				}
-				const n = Math.min(todayMsgs.length, 60);
-				for (let i = 0; i < n; i++) {
-					const m = todayMsgs[i];
-					const row = document.createElement("div");
-					row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:18px;padding:0 4px;border-radius:6px;cursor:pointer";
-					const bar = document.createElement("div");
-					bar.style.cssText = "flex:none;width:16px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3)";
-					const num = document.createElement("span");
-					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;min-width:22px;text-align:right;color:var(--dsw-alias-label-tertiary);display:none";
-					num.textContent = String(i + 1);
-					const txt = document.createElement("span");
-					txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:none;color:var(--dsw-alias-label-secondary)";
-					const short = m.text.length > 60 ? m.text.slice(0, 60) + "…" : m.text;
-					txt.textContent = short;
-					txt.title = m.text;
-					row.appendChild(bar);
-					row.appendChild(num);
-					row.appendChild(txt);
-					row.addEventListener("click", () => scrollToMessage(i));
-					box.appendChild(row);
-					rows.push({ bar, num, txt });
+				// 今天之前的消息（默认折叠，点击顶部按钮展开）
+				if (expanded && prevOpen && prevMsgs.length) {
+					prevMsgs.forEach((m, i) => {
+						const r = buildRow(m, i, true);
+						box.appendChild(r.row);
+						prevRows.push(r);
+					});
 				}
 				updateExpanded(expanded);
+				applyActive();
+			}
+
+			// 构建一行：横杠 + 行号 + 文本（横杠颜色状态机：active 蓝 / 其余灰 / hover 黑）
+			function buildRow(m, idx, isPrev) {
+				const row = document.createElement("div");
+				row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:18px;padding:0 4px;border-radius:6px;cursor:pointer";
+				const bar = document.createElement("div");
+				bar.style.cssText = "flex:none;width:16px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3);transition:background .12s ease";
+				const num = document.createElement("span");
+				num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:9px;min-width:20px;text-align:right;color:var(--dsw-alias-label-tertiary);display:none";
+				num.textContent = String(idx + 1);
+				const txt = document.createElement("span");
+				txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:none;color:var(--dsw-alias-label-secondary);font-size:10px";
+				const short = m.text.length > 60 ? m.text.slice(0, 60) + "…" : m.text;
+				txt.textContent = short;
+				txt.title = m.text;
+				row.appendChild(bar);
+				row.appendChild(num);
+				row.appendChild(txt);
+				// 鼠标划过横杠变黑
+				bar.addEventListener("mouseenter", () => { bar.style.background = "var(--dsw-alias-label-primary)"; });
+				bar.addEventListener("mouseleave", () => applyActive());
+				row.addEventListener("click", () => { setActive(m.globalIdx); scrollToMessage(m.globalIdx); });
+				return { row, bar, num, txt, globalIdx: m.globalIdx };
+			}
+
+			// ---- 横杠颜色状态：页面所在消息（Scroll Spy）蓝，其余灰 ----
+			function setActive(globalIdx) {
+				if (globalIdx === activeGlobal) return;
+				activeGlobal = globalIdx;
+				applyActive();
+			}
+			function applyActive() {
+				applyActiveOn(rows);
+				applyActiveOn(prevRows);
+			}
+			function applyActiveOn(list) {
+				for (const r of list) {
+					r.bar.style.background = r.globalIdx === activeGlobal
+						? "var(--dsw-alias-state-business-primary)"   // 页面所在 = 蓝
+						: "var(--dsw-alias-border-l3)";               // 其余 = 灰
+				}
 			}
 
 			// ---- hover 展开 / 收起（同一元素：横杠列 ↔ 完整大纲） ----
 			function updateExpanded(on) {
 				expanded = on;
-				box.style.background = on ? "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)" : "transparent";
+				// 展开：宽度减半（200px）+ 与 Token HUB 同款半透明+模糊；收起：透明细列
+				box.style.width = on ? "200px" : "auto";
+				box.style.background = on ? "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)" : "transparent";
 				box.style.borderColor = on ? "var(--dsw-alias-border-l2)" : "transparent";
-				box.style.boxShadow = on ? "0 8px 24px rgba(0,0,0,.25)" : "none";
-				head.style.display = (on && todayMsgs.length > 0) ? "" : "none";
+				box.style.boxShadow = on ? "0 4px 16px rgba(0,0,0,.22)" : "none";
+				box.style.backdropFilter = on ? "blur(4px)" : "none";
+				head.style.display = (on && (todayMsgs.length > 0 || prevMsgs.length > 0)) ? "flex" : "none";
+				prevBtn.style.display = (on && prevMsgs.length > 0) ? "" : "none";
 				for (const r of rows) {
 					r.num.style.display = on ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
 				}
-				if (on && !todayMsgs.length) renderRows();
+				for (const r of prevRows) {
+					r.num.style.display = on ? "" : "none";
+					r.txt.style.display = on ? "" : "none";
+				}
 			}
-			box.addEventListener("mouseenter", () => updateExpanded(true));
-			box.addEventListener("mouseleave", () => updateExpanded(false));
+			box.addEventListener("mouseenter", () => { updateExpanded(true); renderRows(); });
+			box.addEventListener("mouseleave", () => { updateExpanded(false); prevOpen = false; renderRows(); });
+			prevBtn.addEventListener("click", (e) => {
+				e.stopPropagation();
+				prevOpen = !prevOpen;
+				renderRows();
+			});
 
-			// ---- 点击：平滑滚动定位（无高亮） ----
+			// ---- 点击：平滑滚动定位（globalIdx 定位 DOM 第 n 条 user 行） ----
 			function findChatRoot() {
 				return document.querySelector('[data-slot="conversation"]');
 			}
@@ -1066,13 +1148,11 @@ window.__ModuleLoader__.load({
 				}
 				return null;
 			}
-			function scrollToMessage(todayIdx) {
-				const m = todayMsgs[todayIdx];
-				if (!m) return;
+			function scrollToMessage(globalIdx) {
 				const root = findChatRoot();
 				if (!root) return;
 				const els = root.querySelectorAll('[data-chat-flow-kind="user"]');
-				const el = els[m.globalIdx];
+				const el = els[globalIdx];
 				if (!el) return;
 				const container = findScrollContainer(root);
 				if (container) {
@@ -1084,14 +1164,38 @@ window.__ModuleLoader__.load({
 				}
 			}
 
-			// ---- 位置：对话区滚动容器左外侧（侧边栏右外侧、对话区左侧） ----
+			// ---- Scroll Spy：页面所在消息 → 对应横杠变蓝（IntersectionObserver） ----
+			function ensureSpy() {
+				const root = findChatRoot();
+				if (!root) return;
+				if (!spyObserver || spyRoot !== root) {
+					if (spyObserver) spyObserver.disconnect();
+					spyRoot = root;
+					spyObserver = new IntersectionObserver((entries) => {
+						const hit = entries.filter((e) => e.isIntersecting);
+						if (!hit.length) return;
+						const last = hit[hit.length - 1];
+						const g = last.target.dataset.userSeq;
+						if (g !== undefined) setActive(Number(g));
+					}, { root: findScrollContainer(root) || null, rootMargin: "0px 0px -80% 0px" });
+				} else {
+					spyObserver.disconnect();
+				}
+				const els = root.querySelectorAll('[data-chat-flow-kind="user"]');
+				els.forEach((el, i) => { el.dataset.userSeq = String(i); spyObserver.observe(el); });
+			}
+
+			// ---- 位置：一开始就在对话区左侧（滚动容器左内缘+4），无移动动画 ----
 			function placeBox() {
 				const root = findChatRoot();
 				const container = root ? (findScrollContainer(root) || root) : null;
 				if (!container) return;
 				try {
 					const r = container.getBoundingClientRect();
-					if (r.width > 0) box.style.left = Math.max(0, r.left + 4) + "px";
+					if (r.width > 0) {
+						box.style.left = Math.max(0, r.left + 4) + "px";
+						box.style.visibility = "visible";
+					}
 				} catch (e) {}
 			}
 
@@ -1100,8 +1204,10 @@ window.__ModuleLoader__.load({
 				try { sessions.list.subscribe(() => loadToday()); } catch (e) {}
 			}
 			loadToday();
-			setInterval(() => { loadToday(); placeBox(); }, 10000);
-			setInterval(placeBox, 2000);
+			placeBox();
+			ensureSpy();
+			setInterval(() => { loadToday(); placeBox(); ensureSpy(); }, 5000);
+			setInterval(placeBox, 1000);
 
 			document.body.appendChild(box);
 		}
