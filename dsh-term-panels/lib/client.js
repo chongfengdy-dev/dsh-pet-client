@@ -394,6 +394,9 @@ window.__ModuleLoader__.load({
 			const hud = buildHud();
 			document.body.appendChild(hud.root);
 
+			// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时右下角提示） ----------
+			buildZoomHud();
+
 			// ---------- 点击外部收起面板（设置浮层算面板内部，不收起） ----------
 			document.addEventListener("click", (e) => {
 				const t = e.target;
@@ -739,6 +742,50 @@ window.__ModuleLoader__.load({
 					mode: "cors",
 				}).catch(() => {});
 			} catch (e) {}
+		}
+
+		// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时右下角显示） ----------
+		// WebView2 浏览器缩放（Ctrl+滚轮 / Ctrl+± / Ctrl+0）会改变 window.devicePixelRatio
+		// （= 系统 DPI 缩放 × 页面缩放）。记录加载时 DPR 为基准，缩放后相除即得当前比例。
+		// 显示 1.5s 后自动隐藏；纯色背景 + 跟随主题。
+		function buildZoomHud() {
+			const el = document.createElement("div");
+			el.id = "dsh-zoom-hud";
+			Object.assign(el.style, {
+				position: "fixed", right: "16px", bottom: "16px", zIndex: "99999",
+				padding: "4px 10px", borderRadius: "8px",
+				background: "var(--dsw-alias-bg-layer-2)",
+				border: "1px solid var(--dsw-alias-border-l2)",
+				boxShadow: "0 4px 16px rgba(0,0,0,.22)",
+				color: "var(--dsw-alias-label-primary)",
+				fontFamily: 'system-ui, "Segoe UI", sans-serif',
+				fontSize: "12px", fontWeight: "600",
+				display: "none",
+				pointerEvents: "none",
+				userSelect: "none",
+			});
+			document.body.appendChild(el);
+			const baseDPR = window.devicePixelRatio || 1;
+			let hideTimer = null;
+			let readTimer = null;
+			function show() {
+				el.style.display = "";
+				el.textContent = "缩放…";
+				clearTimeout(hideTimer);
+				clearTimeout(readTimer);
+				// 等 WebView2 缩放生效后再读 DPR（wheel 事件时缩放尚未应用）
+				readTimer = setTimeout(() => {
+					const dpr = window.devicePixelRatio || 1;
+					el.textContent = "缩放 " + Math.round((dpr / baseDPR) * 100) + "%";
+				}, 120);
+				hideTimer = setTimeout(() => { el.style.display = "none"; }, 1500);
+			}
+			document.addEventListener("wheel", (e) => {
+				if (e.ctrlKey) show();
+			}, { passive: true });
+			document.addEventListener("keydown", (e) => {
+				if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "0")) show();
+			});
 		}
 
 		// ---------- Token HUD（常驻右上角） ----------
