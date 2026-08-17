@@ -394,9 +394,6 @@ window.__ModuleLoader__.load({
 			const hud = buildHud();
 			document.body.appendChild(hud.root);
 
-			// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时右下角提示） ----------
-			buildZoomHud();
-
 			// ---------- 点击外部收起面板（设置浮层算面板内部，不收起） ----------
 			document.addEventListener("click", (e) => {
 				const t = e.target;
@@ -744,52 +741,6 @@ window.__ModuleLoader__.load({
 			} catch (e) {}
 		}
 
-		// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时屏幕中央显示） ----------
-		// WebView2 浏览器缩放（Ctrl+滚轮 / Ctrl+± / Ctrl+0）会改变 window.devicePixelRatio
-		// （= 系统 DPI 缩放 × 页面缩放）。记录加载时 DPR 为基准，缩放后相除即得当前比例。
-		// 屏幕中央、半透明背景、字体 18px、只显示数字；1.5s 后自动隐藏。
-		function buildZoomHud() {
-			const el = document.createElement("div");
-			el.id = "dsh-zoom-hud";
-			Object.assign(el.style, {
-				position: "fixed", left: "50%", top: "50%",
-				transform: "translate(-50%, -50%)", zIndex: "99999",
-				padding: "10px 22px", borderRadius: "12px",
-				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
-				border: "1px solid var(--dsw-alias-border-l2)",
-				boxShadow: "0 4px 16px rgba(0,0,0,.22)",
-				backdropFilter: "blur(4px)",
-				color: "var(--dsw-alias-label-primary)",
-				fontFamily: 'system-ui, "Segoe UI", sans-serif',
-				fontSize: "18px", fontWeight: "600",
-				display: "none",
-				pointerEvents: "none",
-				userSelect: "none",
-			});
-			document.body.appendChild(el);
-			const baseDPR = window.devicePixelRatio || 1;
-			let hideTimer = null;
-			let readTimer = null;
-			function show() {
-				el.style.display = "";
-				el.textContent = "…";
-				clearTimeout(hideTimer);
-				clearTimeout(readTimer);
-				// 等 WebView2 缩放生效后再读 DPR（wheel 事件时缩放尚未应用）
-				readTimer = setTimeout(() => {
-					const dpr = window.devicePixelRatio || 1;
-					el.textContent = Math.round((dpr / baseDPR) * 100) + "%";
-				}, 120);
-				hideTimer = setTimeout(() => { el.style.display = "none"; }, 1500);
-			}
-			document.addEventListener("wheel", (e) => {
-				if (e.ctrlKey) show();
-			}, { passive: true });
-			document.addEventListener("keydown", (e) => {
-				if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "0")) show();
-			});
-		}
-
 		// ---------- Token HUD（常驻右上角） ----------
 		function buildHud() {
 			const root = document.createElement("div");
@@ -950,239 +901,170 @@ window.__ModuleLoader__.load({
 		const OUTLINE_FLASH = "dsh-msg-outline-flash";
 
 		function buildMessageOutline(ctx) {
-			// 2026-08-17 主定稿（v7 基底重做，对齐 DeepSeek 网页版）：
-			// - 单元素设计：平时一列细横杠；hover 同一元素展开为完整大纲面板
-			//   （横杠+行号+文本同一行，天然垂直对齐；横杠在弹出面板内）；
-			// - 位置：一开始就在对话区滚动容器左内缘+4（初始隐藏，定位到才显示；
-			//   无 left 动画——v6 的 transition 导致"先出现在侧边栏内再滑过来"）；
-			// - 数据：session.history 事件流（user/message 文本在 data.content blocks），
-			//   只显示主本人提问（source.kind==="user"），**不分今天/之前**（全部消息）；
-			//   横杠列最多生成 10 条（取最近 10 条，最新在最下），再多了 hover 展开的
-			//   面板显示全部消息、带滚动条上下查找（对齐 DeepSeek 网页版）；
-			// - 横杠颜色：页面所在消息=蓝（Scroll Spy，IntersectionObserver）+ 粗 50%，
-			//   其余=灰；鼠标划过整行变色（横杠变黑+行背景）；点击某行→变蓝并平滑滚动；
-			// - 初始蓝色=最后一条（刷新时页面在底部，最新消息的横杠蓝）；
-			// - 样式：展开宽度 400px（字体 12px），与 Token HUB 同款半透明+模糊；
-			// - 超长消息截断 + …，完整文本放 title。
+			const sessions = ctx.sessions || (ctx.get ? ctx.get("sessions") : undefined);
+			if (!sessions) return;
 			if (document.getElementById(OUTLINE_RAIL_ID)) return; // 已注入
 
-			const connection = ctx.connection;
-			const sessions = ctx.sessions || (ctx.get ? ctx.get("sessions") : undefined);
-
-			// ---- 单元素：横杠列 = 大纲面板（hover 展开） ----
-			const box = document.createElement("div");
-			box.id = OUTLINE_RAIL_ID;
-			Object.assign(box.style, {
+			// ---- 左缘横杠条（无感缝合） ----
+			const rail = document.createElement("div");
+			rail.id = OUTLINE_RAIL_ID;
+			Object.assign(rail.style, {
 				position: "fixed", left: "0", top: "50%",
-				transform: "translateY(-50%)", zIndex: "99990",
-				display: "flex", flexDirection: "column", gap: "6px",
-				padding: "6px", borderRadius: "10px",
-				background: "transparent", border: "1px solid transparent",
+				transform: "translateY(-50%)", zIndex: "99989",
+				display: "flex", flexDirection: "column", alignItems: "center",
+				gap: "5px", padding: "8px 6px",
+				borderRadius: "0 10px 10px 0",
 				cursor: "pointer",
-				transition: "background .15s ease, border-color .15s ease",
-				maxHeight: "70vh", overflowY: "auto",
-				fontSize: "12px",
-				visibility: "hidden", // 定位到对话区左缘前不显示
+				background: "transparent",
 			});
 
-			// 展开时标题（平时隐藏）
-			const head = document.createElement("div");
-			Object.assign(head.style, {
-				display: "none", justifyContent: "space-between", alignItems: "center",
-				fontSize: "11px", color: "var(--dsw-alias-label-tertiary)",
-				padding: "0 2px 4px", fontWeight: "600", whiteSpace: "nowrap",
+			// ---- 展开面板 ----
+			const panel = document.createElement("div");
+			panel.id = OUTLINE_PANEL_ID;
+			Object.assign(panel.style, {
+				position: "fixed", left: "24px", top: "50%",
+				transform: "translateY(-50%)", zIndex: "99990",
+				width: "290px", maxHeight: "72vh",
+				display: "none", flexDirection: "column",
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)",
+				border: "1px solid var(--dsw-alias-border-l2)",
+				borderRadius: "12px",
+				boxShadow: "0 8px 24px rgba(0,0,0,.25)",
+				backdropFilter: "blur(8px)",
+				color: "var(--dsw-alias-label-primary)",
+				fontFamily: 'system-ui, "Segoe UI", sans-serif',
+				fontSize: "12px",
 			});
-			const headTitle = document.createElement("span");
-			headTitle.textContent = "我的消息";
-			const headCount = document.createElement("span");
-			headCount.style.cssText = "font-size:10px;color:var(--dsw-alias-label-tertiary)";
-			head.appendChild(headTitle);
-			head.appendChild(headCount);
-			box.appendChild(head);
+			const pHead = document.createElement("div");
+			Object.assign(pHead.style, {
+				display: "flex", justifyContent: "space-between", alignItems: "center",
+				padding: "9px 12px", borderBottom: "1px solid var(--dsw-alias-border-l2)",
+				flex: "none",
+			});
+			const pTitle = document.createElement("span");
+			pTitle.style.cssText = "font-weight:600;font-size:12px";
+			pTitle.textContent = "我的消息";
+			const pCount = document.createElement("span");
+			pCount.style.cssText = "font-size:11px;color:var(--dsw-alias-label-tertiary)";
+			pHead.appendChild(pTitle);
+			pHead.appendChild(pCount);
+			const pList = document.createElement("div");
+			Object.assign(pList.style, { overflowY: "auto", padding: "6px", flex: "1" });
+			panel.appendChild(pHead);
+			panel.appendChild(pList);
 
 			// ---- 状态 ----
-			let msgs = [];            // [{text, time, globalIdx}] 全部我的消息（不分今天）
-			let rows = [];            // {row, bar, num, txt, globalIdx} 全部行引用
 			let sessionId = null;
-			let expanded = false;
-			let activeGlobal = -1;    // 当前阅读位置的全局序号（-1=无）
-			let spyObserver = null;
-			let spyRoot = null;
+			let binding = null;      // { session: { getSnapshot, subscribe } }
+			let userMsgs = [];       // string[]（我的消息首行文本）
 
 			function currentSessionId() {
-				const snap = sessions && sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
+				const snap = sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
 				return snap && snap.current !== undefined ? snap.current : null;
 			}
 
-			// ---- 数据：history 事件流（user/message 文本在 data.content blocks） ----
-			// 只显示主本人提问（source.kind==="user"）；**全部消息**（不分今天/之前）。
-			// history 分页契约：maxMessages 默认 50 条消息（user+assistant 计数），长对话会
-			// 截断早期历史 → 用 hasMore/beforeSeq 循环翻页把全部历史拉完（页序为最新在前，
-			// 收集后整体反转恢复旧→新，globalIdx 与对话区 DOM user 行号一一对应）。
-			function loadMsgs() {
+			function rebind() {
 				const sid = currentSessionId();
-				if (!sid) { msgs = []; renderRows(); return; }
-				if (sid !== sessionId) {
-					sessionId = sid;
-					if (sessions && sessions.binding) {
-						try {
-							const b = sessions.binding(sid);
-							if (b && b.session && b.session.subscribe) b.session.subscribe(() => loadMsgs());
-						} catch (e) {}
-					}
+				if (sid === sessionId && binding) { rebuild(); return; }
+				sessionId = sid;
+				if (sid === null) { binding = null; userMsgs = []; renderAll(); return; }
+				try { binding = sessions.binding(sid); } catch (e) { binding = null; }
+				if (binding && binding.session && binding.session.subscribe) {
+					try { binding.session.subscribe(() => rebuild()); } catch (e) {}
 				}
-				if (!connection || !connection.api || !connection.api.sessions || !connection.api.sessions.history) return;
-				(async () => {
-					const collected = [];   // 页数组（最新页在前）
-					let beforeSeq;
-					let hasMore = true;
-					for (let page = 0; page < 30 && hasMore; page++) {
-						const payload = { sessionId: sid, maxMessages: 200 };
-						if (beforeSeq !== undefined) payload.beforeSeq = beforeSeq;
-						const r = await connection.api.sessions.history(payload);
-						const value = r && r.result && r.result.ok ? r.result.value : null;
-						const events = (value && value.events) || [];
-						if (!events.length) break;
-						collected.push(events);
-						const first = events[0];
-						const firstEv = first && (first.event || first);
-						const nextSeq = firstEv && firstEv.seq;
-						hasMore = !!(value && value.hasMore);
-						if (!hasMore || nextSeq === undefined || nextSeq === beforeSeq) break;
-						beforeSeq = nextSeq;
-					}
-					// 反转页序 → 旧→新；过滤 user/message + source.kind==user，按序计数 globalIdx
-					const all = [];
-					for (let p = collected.length - 1; p >= 0; p--) {
-						for (const entry of collected[p]) {
-							const ev = entry && (entry.event || entry);
-							if (!ev || ev.type !== "user/message") continue;
-							// 只显示主本人提问（source.kind==="user"；排除 steering/plugin/compact 等非真人提问）
-							const srcKind = ev.data && ev.data.source && ev.data.source.kind;
-							if (srcKind !== undefined && srcKind !== "user") continue;
-							const dd = ev.data || {};
-							let text = "";
-							const content = dd.content || (dd.message && dd.message.content) || [];
-							if (Array.isArray(content)) {
-								for (const b of content) {
-									if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
-										text += b.text + "\n";
-									}
-								}
-							} else if (typeof dd.text === "string") {
-								text = dd.text;
-							}
-							text = text.trim();
-							if (!text) continue;
-							const g = all.length;
-							all.push({ text, time: ev.time || 0, globalIdx: g });
+				rebuild();
+			}
+
+			function rebuild() {
+				if (!binding || !binding.session) { userMsgs = []; }
+				else {
+					try {
+						const snap = binding.session.getSnapshot();
+						userMsgs = collectUserMessages(snap);
+					} catch (e) { userMsgs = []; }
+				}
+				renderAll();
+			}
+
+			function collectUserMessages(snap) {
+				const out = [];
+				const nodes = snap && snap.nodes;
+				if (!Array.isArray(nodes)) return out;
+				for (const node of nodes) {
+					if (node.kind !== "user" && node.kind !== "steering") continue;
+					const blocks = node.content || node.blocks || [];
+					let text = "";
+					for (const b of blocks) {
+						if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
+							text += b.text + "\n";
 						}
 					}
-					msgs = all;
-					// 初始蓝色 = 最后一条（最新；刷新时页面在底部，最底下横杠应蓝）
-					if (msgs.length) setActive(msgs[msgs.length - 1].globalIdx);
-					renderRows();
-					ensureSpy();
-				})().catch(() => {});
+					const t = text.trim().split("\n", 1)[0] || "";
+					if (t) out.push(t);
+				}
+				return out;
 			}
 
-			function renderRows() {
-				// 保留 head（第一个子节点），清空其余行
-				while (box.children.length > 1) box.removeChild(box.lastChild);
-				rows = [];
-				headCount.textContent = msgs.length ? String(msgs.length) + " 条" : "";
-				const showHead = expanded && msgs.length > 0;
-				head.style.display = showHead ? "flex" : "none";
-				if (!msgs.length) {
-					if (expanded) {
-						const e = document.createElement("div");
-						e.style.cssText = "padding:4px 2px;color:var(--dsw-alias-label-tertiary);font-size:11px";
-						e.textContent = "暂无我的消息";
-						box.appendChild(e);
-					}
+			function renderAll() {
+				renderRail();
+				renderPanel();
+			}
+
+			function renderRail() {
+				rail.textContent = "";
+				const n = Math.min(userMsgs.length, 60);
+				for (let i = 0; i < n; i++) {
+					const bar = document.createElement("div");
+					Object.assign(bar.style, {
+						width: "14px", height: "2px", borderRadius: "1px",
+						background: "var(--dsw-alias-border-l3)",
+					});
+					bar.title = (i + 1) + ". " + (userMsgs[i] || "");
+					bar.addEventListener("click", () => scrollToMessage(i));
+					rail.appendChild(bar);
+				}
+				if (userMsgs.length > 60) {
+					const more = document.createElement("div");
+					more.style.cssText = "font-size:9px;color:var(--dsw-alias-label-tertiary)";
+					more.textContent = "+" + (userMsgs.length - 60);
+					rail.appendChild(more);
+				}
+			}
+
+			function renderPanel() {
+				pList.textContent = "";
+				pCount.textContent = userMsgs.length ? String(userMsgs.length) + " 条" : "";
+				if (!userMsgs.length) {
+					const e = document.createElement("div");
+					e.style.cssText = "padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary)";
+					e.textContent = "暂无我的消息";
+					pList.appendChild(e);
 					return;
 				}
-				// 全部消息行（展开面板显示全部，滚动条上下查找）
-				msgs.forEach((m, i) => {
-					const r = buildRow(m, i);
-					box.appendChild(r.row);
-					rows.push(r);
+				userMsgs.forEach((text, idx) => {
+					const row = document.createElement("div");
+					Object.assign(row.style, {
+						display: "flex", gap: "8px", padding: "6px 10px",
+						borderRadius: "8px", cursor: "pointer", alignItems: "baseline",
+					});
+					row.onmouseenter = () => { row.style.background = "var(--dsw-alias-interactive-bg-hover)"; };
+					row.onmouseleave = () => { row.style.background = "transparent"; };
+					const num = document.createElement("span");
+					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;color:var(--dsw-alias-label-tertiary);min-width:24px;text-align:right";
+					num.textContent = String(idx + 1);
+					const txt = document.createElement("span");
+					txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+					const short = text.length > 60 ? text.slice(0, 60) + "…" : text;
+					txt.textContent = short;
+					txt.title = text;
+					row.appendChild(num);
+					row.appendChild(txt);
+					row.addEventListener("click", () => scrollToMessage(idx));
+					pList.appendChild(row);
 				});
-				updateExpanded(expanded);
-				applyActive();
 			}
 
-			// 构建一行：横杠 + 行号 + 文本
-			// 横杠颜色状态机：active 蓝+粗50%（3px）/ 其余灰（2px）/ hover 黑；
-			// hover 整行变色（横杠变黑 + 行背景），文字区域也触发。
-			function buildRow(m, idx) {
-				const row = document.createElement("div");
-				row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:18px;padding:0 4px;border-radius:6px;cursor:pointer;transition:background .12s ease";
-				const bar = document.createElement("div");
-				bar.style.cssText = "flex:none;width:12px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3);transition:background .12s ease, height .12s ease";
-				const num = document.createElement("span");
-				num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;min-width:22px;text-align:right;color:var(--dsw-alias-label-tertiary);display:none";
-				num.textContent = String(idx + 1);
-				const txt = document.createElement("span");
-				txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:none;color:var(--dsw-alias-label-secondary);font-size:12px";
-				const short = m.text.length > 60 ? m.text.slice(0, 60) + "…" : m.text;
-				txt.textContent = short;
-				txt.title = m.text;
-				row.appendChild(bar);
-				row.appendChild(num);
-				row.appendChild(txt);
-				// hover 整行变色（横杠变黑 + 行背景；文字区域也触发）
-				row.addEventListener("mouseenter", () => {
-					bar.style.background = "var(--dsw-alias-label-primary)";
-					row.style.background = "var(--dsw-alias-interactive-bg-hover)";
-				});
-				row.addEventListener("mouseleave", () => {
-					row.style.background = "transparent";
-					applyActive();
-				});
-				row.addEventListener("click", () => { setActive(m.globalIdx); scrollToMessage(m.globalIdx); });
-				return { row, bar, num, txt, globalIdx: m.globalIdx, idx };
-			}
-
-			// ---- 横杠颜色状态：页面所在消息（Scroll Spy）蓝+粗，其余灰 ----
-			function setActive(globalIdx) {
-				if (globalIdx === activeGlobal) return;
-				activeGlobal = globalIdx;
-				applyActive();
-			}
-			function applyActive() {
-				for (const r of rows) {
-					const on = r.globalIdx === activeGlobal;
-					r.bar.style.background = on
-						? "var(--dsw-alias-state-business-primary)"   // 页面所在 = 蓝
-						: "var(--dsw-alias-border-l3)";               // 其余 = 灰
-					r.bar.style.height = on ? "3px" : "2px";          // 蓝色粗 50%
-				}
-			}
-
-			// ---- hover 展开 / 收起（同一元素：横杠列 ↔ 完整大纲） ----
-			// 收起：只显示最近 10 条消息的横杠（其余整行隐藏）；展开：全部消息 bar+num+txt
-			// 展开样式：纯色背景（去掉半透明+模糊，主定稿 2026-08-17）
-			function updateExpanded(on) {
-				expanded = on;
-				// 展开：宽度 400px + 纯色背景（不透明，去模糊）；收起：透明细列
-				box.style.width = on ? "400px" : "auto";
-				box.style.background = on ? "var(--dsw-alias-bg-layer-2)" : "transparent";
-				box.style.borderColor = on ? "var(--dsw-alias-border-l2)" : "transparent";
-				box.style.boxShadow = on ? "0 4px 16px rgba(0,0,0,.22)" : "none";
-				box.style.backdropFilter = on ? "none" : "none";
-				head.style.display = (on && msgs.length > 0) ? "flex" : "none";
-				for (const r of rows) {
-					const recent = msgs.length - r.idx <= 10;   // 最近 10 条
-					r.row.style.display = (on || recent) ? "flex" : "none";
-					r.num.style.display = on ? "" : "none";
-					r.txt.style.display = on ? "" : "none";
-				}
-			}
-			box.addEventListener("mouseenter", () => { updateExpanded(true); renderRows(); });
-			box.addEventListener("mouseleave", () => { updateExpanded(false); renderRows(); });
-
-			// ---- 点击：平滑滚动定位（globalIdx 定位 DOM 第 n 条 user 行） ----
+			// ---- DOM 定位（data-chat-flow-kind="user" 第 n 行 = 第 n 条我的消息） ----
 			function findChatRoot() {
 				return document.querySelector('[data-slot="conversation"]');
 			}
@@ -1196,77 +1078,57 @@ window.__ModuleLoader__.load({
 				}
 				return null;
 			}
-			function scrollToMessage(globalIdx) {
+			function scrollToMessage(userIndex) {
 				const root = findChatRoot();
 				if (!root) return;
-				const els = root.querySelectorAll('[data-chat-flow-kind="user"]');
+				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
+				const el = rows[userIndex];
+				if (!el) return;
 				const container = findScrollContainer(root);
-				const el = els[globalIdx];
-				if (!el) {
-					// DOM 里没有对应行（最后一条往往是最新消息，DOM 行可能尚未渲染）：
-					// 兜底直接滚到容器底部
-					if (container) container.scrollTop = container.scrollHeight;
-					else root.scrollIntoView({ block: "end" });
-					return;
-				}
 				if (container) {
 					const cr = container.getBoundingClientRect();
 					const tr = el.getBoundingClientRect();
-					container.scrollTop = container.scrollTop + tr.top - cr.top - 12; // 瞬间定位
+					container.scrollTo({ top: container.scrollTop + tr.top - cr.top - 12 });
 				} else {
-					el.scrollIntoView({ block: "start" }); // 瞬间定位
+					el.scrollIntoView({ block: "start" });
 				}
+				el.classList.add(OUTLINE_FLASH);
+				setTimeout(() => el.classList.remove(OUTLINE_FLASH), 1600);
 			}
 
-			// ---- Scroll Spy：页面所在消息 → 对应横杠变蓝（IntersectionObserver） ----
-			function ensureSpy() {
-				const root = findChatRoot();
-				if (!root) return;
-				if (!spyObserver || spyRoot !== root) {
-					if (spyObserver) spyObserver.disconnect();
-					spyRoot = root;
-					spyObserver = new IntersectionObserver((entries) => {
-						const hit = entries.filter((e) => e.isIntersecting);
-						if (!hit.length) return;
-						const last = hit[hit.length - 1];
-						const g = last.target.dataset.userSeq;
-						if (g !== undefined) setActive(Number(g));
-					}, { root: findScrollContainer(root) || null, rootMargin: "0px 0px -80% 0px" });
-				} else {
-					spyObserver.disconnect();
-				}
-				const els = root.querySelectorAll('[data-chat-flow-kind="user"]');
-				els.forEach((el, i) => { el.dataset.userSeq = String(i); spyObserver.observe(el); });
+			// ---- hover 展开 / 移出收起 ----
+			let hideTimer = null;
+			rail.addEventListener("mouseenter", () => {
+				clearTimeout(hideTimer);
+				rebuild();
+				panel.style.display = "flex";
+			});
+			panel.addEventListener("mouseenter", () => { clearTimeout(hideTimer); });
+			const hidePanel = () => {
+				hideTimer = setTimeout(() => { panel.style.display = "none"; }, 180);
+			};
+			rail.addEventListener("mouseleave", hidePanel);
+			panel.addEventListener("mouseleave", hidePanel);
+
+			// ---- 数据刷新：会话切换订阅 + 轮询兜底 ----
+			if (sessions.list && sessions.list.subscribe) {
+				try { sessions.list.subscribe(() => rebind()); } catch (e) {}
+			}
+			rebind();
+			setInterval(rebind, 15000);
+
+			// ---- 定位高亮动画样式 ----
+			if (!document.getElementById("dsh-msg-outline-style")) {
+				const st = document.createElement("style");
+				st.id = "dsh-msg-outline-style";
+				st.textContent = "." + OUTLINE_FLASH + "{animation:dshOutlineFlash 1.6s ease 1}"
+					+ "@keyframes dshOutlineFlash{0%,100%{background:transparent}15%,35%{background:rgba(255,200,0,.35)}}";
+				document.head.appendChild(st);
 			}
 
-			// ---- 位置：一开始就在对话区左侧（滚动容器左内缘+4），无移动动画 ----
-			function placeBox() {
-				const root = findChatRoot();
-				const container = root ? (findScrollContainer(root) || root) : null;
-				if (!container) return;
-				try {
-					const r = container.getBoundingClientRect();
-					if (r.width > 0) {
-						box.style.left = Math.max(0, r.left + 4) + "px";
-						box.style.visibility = "visible";
-					}
-				} catch (e) {}
-			}
-
-			// ---- 刷新 ----
-			if (sessions && sessions.list && sessions.list.subscribe) {
-				try { sessions.list.subscribe(() => loadMsgs()); } catch (e) {}
-			}
-			loadMsgs();
-			placeBox();
-			ensureSpy();
-			setInterval(() => { loadMsgs(); placeBox(); ensureSpy(); }, 5000);
-			setInterval(placeBox, 1000);
-
-			document.body.appendChild(box);
+			document.body.appendChild(rail);
+			document.body.appendChild(panel);
 		}
-
-
 
 exports.apply = apply;
 		exports.inject = ["connection", "sessions"];
