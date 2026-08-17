@@ -974,7 +974,8 @@ window.__ModuleLoader__.load({
 			// ---- 状态 ----
 			let sessionId = null;
 			let binding = null;      // { session: { getSnapshot, subscribe } }
-			let userMsgs = [];       // string[]（我的消息首行文本）
+			let unsubscribe = null;  // 当前会话订阅退订函数（会话切换时释放）
+			let userMsgs = [];       // string[]（我的消息首行文本，仅订阅后新增）
 			let activeIdx = -1;      // 当前点击/选中的消息下标（-1=无，横杠+文字变蓝）
 			let rows = [];           // {row, bar, num, txt, idx} 行引用（颜色状态更新用）
 			let expanded = false;    // 是否展开（平时只显示横杠，hover 展开显示行号+文本）
@@ -986,73 +987,51 @@ window.__ModuleLoader__.load({
 
 			function rebind() {
 				const sid = currentSessionId();
-				if (sid === sessionId && binding) { rebuild(); return; }
+				if (sid === sessionId && binding) return;
+				// 会话切换：退订旧会话订阅，清空记录，重新绑定新会话
+				if (unsubscribe) { try { unsubscribe(); } catch (e) {} unsubscribe = null; }
 				sessionId = sid;
 				if (sid === null) { binding = null; userMsgs = []; rows = []; renderRows(); return; }
+				userMsgs = []; rows = [];
 				try { binding = sessions.binding(sid); } catch (e) { binding = null; }
 				if (binding && binding.session && binding.session.subscribe) {
-					try { binding.session.subscribe(() => rebuild()); } catch (e) {}
+					try { unsubscribe = binding.session.subscribe(onSessionEvent); } catch (e) {}
 				}
-				rebuild();
+				renderRows();
 			}
 
-			// 增量记录：不拉 history、不轮询。每次订阅触发（来新消息）拿快照，
-			// 与已记录列表尾部对齐，只把新增的 append（来一条加一条）。
-			// 首次：快照里 compaction 后剩余的最近几条作为初始基线。
-			// 会话切换 / compaction 修剪旧消息导致尾部对不上时，才全量重建。
-			function rebuild() {
-				if (!binding || !binding.session) { userMsgs = []; return; }
-				let snapList = [];
-				try {
-					snapList = collectUserMessages(binding.session.getSnapshot());
-				} catch (e) { return; }
-				if (!userMsgs.length) {
-					// 首次（或会话刚切换清空）：快照剩余全部作为基线
-					userMsgs = snapList;
-					renderRows();
-					return;
-				}
-				// 尾部对齐：snapList 尾部应与已记录完全匹配（新消息总是 append 在尾部）
-				let i = snapList.length - 1;
-				let j = userMsgs.length - 1;
-				while (i >= 0 && j >= 0 && snapList[i] === userMsgs[j]) { i--; j--; }
-				if (j >= 0) {
-					// 已记录有未被匹配的（compaction 修剪了旧消息或会话内容变化）→ 以快照为准全量重建
-					userMsgs = snapList;
-					renderRows();
-					return;
-				}
-				// 增量：append 快照尾部新增的行
-				const added = snapList.slice(i + 1);
-				if (!added.length) return;
-				const base = userMsgs.length;
-				userMsgs.push(...added);
-				for (let k = base; k < userMsgs.length; k++) {
-					const r = buildRow(userMsgs[k], k);
-					box.appendChild(r.row);
-					rows.push(r);
-				}
+			// 纯事件流订阅：开会话即开始记录，来一条记一条（不读快照、不读历史、不轮询）。
+			// 只处理 user/message 且 source.kind==="user" 的主提问，准确 append。
+			// 订阅前的旧消息（含插件加载前/compaction 压缩的）一概不显示。
+			function onSessionEvent(evt) {
+				const ev = evt && (evt.event || evt);
+				if (!ev || ev.type !== "user/message") return;
+				const srcKind = ev.data && ev.data.source && ev.data.source.kind;
+				if (srcKind !== undefined && srcKind !== "user") return;
+				const text = extractFirstLine(ev.data);
+				if (!text) return;
+				userMsgs.push(text);
+				const r = buildRow(text, userMsgs.length - 1);
+				box.appendChild(r.row);
+				rows.push(r);
 				updateExpanded(expanded);
 				applyActive();
 			}
 
-			function collectUserMessages(snap) {
-				const out = [];
-				const nodes = snap && snap.nodes;
-				if (!Array.isArray(nodes)) return out;
-				for (const node of nodes) {
-					if (node.kind !== "user" && node.kind !== "steering") continue;
-					const blocks = node.content || node.blocks || [];
-					let text = "";
-					for (const b of blocks) {
+			function extractFirstLine(dd) {
+				if (!dd) return "";
+				let text = "";
+				const content = dd.content || (dd.message && dd.message.content) || [];
+				if (Array.isArray(content)) {
+					for (const b of content) {
 						if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
 							text += b.text + "\n";
 						}
 					}
-					const t = text.trim().split("\n", 1)[0] || "";
-					if (t) out.push(t);
+				} else if (typeof dd.text === "string") {
+					text = dd.text;
 				}
-				return out;
+				return text.trim().split("\n", 1)[0] || "";
 			}
 
 			// 渲染全部行（展开时全部显示+滚动条；收起时只显示最近 10 条横杠，见 updateExpanded）
