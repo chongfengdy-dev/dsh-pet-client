@@ -807,6 +807,7 @@ window.__ModuleLoader__.load({
 			let phase = "none";        // none|up|down|reversed
 			let active = false;        // 手势进行中（超过阈值后）
 			let moved = false;         // 是否已拖动（阻止右键菜单）
+			let pressed = false;        // 右键是否按住（手势进行标志）
 
 			// 拖行轨迹：SVG 折线绘制鼠标实际行进路径
 			const NS = "http://www.w3.org/2000/svg";
@@ -855,14 +856,17 @@ window.__ModuleLoader__.load({
 
 			document.addEventListener("mousedown", (e) => {
 				if (e.button !== 2) return;   // 仅右键
+				pressed = true;
 				startX = e.clientX; startY = lastY = e.clientY;
 				totalDy = 0;
 				phase = "none";
 				active = false;
 				moved = false;
+				pathPoints = [];
+				path.setAttribute("points", "");
 			});
 			document.addEventListener("mousemove", (e) => {
-				if (e.buttons !== 2) return;   // 右键未按住则忽略
+				if (!pressed) return;   // 右键未按住（用标志，不依赖 e.buttons）
 				const dy = e.clientY - lastY;
 				lastY = e.clientY;
 				totalDy += dy;
@@ -870,7 +874,8 @@ window.__ModuleLoader__.load({
 					moved = true;
 					showTrail(e.clientX, e.clientY);
 				}
-				if (!active && Math.abs(totalDy) >= THRESHOLD) active = true;
+				// 判活：路径点数足够（先上后下 totalDy 会抵消，改用位移距离）
+				if (!active && pathPoints.length >= 6) active = true;
 			});
 			// 路径分析：严格"先上后下"（每段在 60° 锥内）才刷新
 			// 上段：从起点向上累计 >= SEG_MIN，方向在屏幕正上方 60° 锥内（偏差 <= 30°）
@@ -910,21 +915,25 @@ window.__ModuleLoader__.load({
 			}
 			document.addEventListener("mouseup", (e) => {
 				if (e.button !== 2) return;
-				hideTrail();
-				if (!active) return;
-				const sc = findScrollable(e.target);
-				if (isRefreshGesture()) {
-					// 严格先上后下（60° 锥内）→ 刷新页面
-					location.reload();
-				} else {
-					// 上/下拖需在正上/正下 60° 锥内；斜向/横向不动作
-					const dir = overallDirection();
-					if (dir === "up") {
-						sc.scrollTop = 0;
-					} else if (dir === "down") {
-						sc.scrollTop = sc.scrollHeight;
+				pressed = false;
+				// 强制记录终点，供路径分析（hideTrail 会清空 pathPoints，须先分析再清理）
+				showTrail(e.clientX, e.clientY);
+				if (active) {
+					const sc = findScrollable(e.target);
+					if (isRefreshGesture()) {
+						// 严格先上后下（60° 锥内）→ 刷新页面
+						location.reload();
+					} else {
+						// 上/下拖需在正上/正下 60° 锥内；斜向/横向不动作
+						const dir = overallDirection();
+						if (dir === "up") {
+							sc.scrollTop = 0;
+						} else if (dir === "down") {
+							sc.scrollTop = sc.scrollHeight;
+						}
 					}
 				}
+				hideTrail();
 				active = false;
 				phase = "none";
 			});
