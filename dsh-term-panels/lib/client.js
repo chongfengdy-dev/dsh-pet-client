@@ -1046,6 +1046,13 @@ window.__ModuleLoader__.load({
 					renderRows();
 				}
 				rebuildRowMap();
+				// 加载历史期间隐藏行号（避免序号整体跳动），加载完成再显示
+				if (snapHasMore) {
+					setNumVisible(false);
+				} else {
+					updateNumbers();
+					setNumVisible(true);
+				}
 				// 还有更早历史 → 继续加载（loadOlder 分页；DOM 变化会再触发 sync）
 				if (snapHasMore) maybeLoadOlder();
 			}
@@ -1175,18 +1182,28 @@ window.__ModuleLoader__.load({
 						rows.push(r);
 					});
 				}
-				// 重排序号（倒序：最新=1，往上递增）——只在行数变化后统一更新
+				// 重排序号（正序：最早=1，越新越大）——加载历史期间由 setNumVisible 隐藏
 				updateNumbers();
 				updateExpanded(expanded);
+				if (numHidden) setNumVisible(false);   // 保持加载中的隐藏态
 				applyActive();
 			}
 
-			// 更新所有行的序号（倒序：列表底部最新=1，往上递增）
+			// 更新所有行的序号（正序：最早=1，越新越大）
 			function updateNumbers() {
-				const total = userMsgs.length;
 				for (const r of rows) {
 					const idx = userMsgs.findIndex((m) => m.key === r.key);
-					if (idx >= 0) r.num.textContent = String(total - idx);
+					if (idx >= 0) r.num.textContent = String(idx + 1);
+				}
+			}
+
+			// 加载历史期间隐藏行号（序号会在 prepend 后整体变化，避免跳动），
+			// 加载完成（hasMore=false）后统一显示。新消息 append 不影响旧序号，可即时显示。
+			let numHidden = false;
+			function setNumVisible(visible) {
+				numHidden = !visible;
+				for (const r of rows) {
+					r.num.style.display = visible ? "" : "none";
 				}
 			}
 
@@ -1257,7 +1274,7 @@ window.__ModuleLoader__.load({
 				for (const r of rows) {
 					const recent = userMsgs.length - r.idx <= 10;   // 最近 10 条
 					r.row.style.display = (on || recent) ? "flex" : "none";
-					r.num.style.display = on ? "" : "none";
+					// num 显隐由 setNumVisible 统一控制（加载历史期间隐藏）
 					r.txt.style.display = on ? "" : "none";
 				}
 			}
