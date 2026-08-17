@@ -976,6 +976,7 @@ window.__ModuleLoader__.load({
 			let binding = null;      // { session: { getSnapshot, subscribe } }
 			let unsubscribe = null;  // 当前会话订阅退订函数（会话切换时释放）
 			let userMsgs = [];       // string[]（我的消息首行文本，服务端持久化）
+			let anchorText = null;   // 基线锚点（首次=null：设锚不显示旧消息；之后只追加快照锚点之后的新消息）
 			let activeIdx = -1;      // 当前点击/选中的消息下标（-1=无，横杠+文字变蓝）
 			let rows = [];           // {row, bar, num, txt, idx} 行引用（颜色状态更新用）
 			let expanded = false;    // 是否展开（平时只显示横杠，hover 展开显示行号+文本）
@@ -1025,11 +1026,13 @@ window.__ModuleLoader__.load({
 					try { unsubscribe = binding.session.subscribe(onSessionEvent); } catch (e) {}
 				}
 				renderRows();
+				anchorText = null;
 				// 从服务端恢复该会话历史（关机重启也能找回）
 				loadStored(sid, (list) => {
 					if (sid !== sessionId) return; // 已切走，忽略
 					if (!list.length) return;
-					// 服务端有记录：合并（跳过已存在的），补齐渲染
+					// 服务端有记录：合并（跳过已存在的），补齐渲染；锚点 = 恢复列表最后一条，
+					// 之后 onSessionEvent 只追加快照中更新的消息（不重复不拉旧）
 					let added = false;
 					for (const t of list) {
 						if (userMsgs.includes(t)) continue;
@@ -1039,24 +1042,47 @@ window.__ModuleLoader__.load({
 						rows.push(r);
 						added = true;
 					}
-					if (added) { updateExpanded(expanded); applyActive(); }
+					if (added) {
+						anchorText = userMsgs[userMsgs.length - 1];
+						updateExpanded(expanded);
+						applyActive();
+					}
 					// 服务端记录补齐后再同步快照增量
 					onSessionEvent();
 				});
 			}
 
-			// 事件驱动：订阅回调 → 读快照 → 与已记录对比，只 append 真正新增的消息。
-			// 不能按位置盲目追加——快照前部可能与已记录不同（compaction 修剪早期消息、
-			// steering 过滤差异），按位置取可能重复追加老消息。改为逐条按文本去重：
-			// 已在列表中的跳过，只在尾部真正的新消息才 append。
+			// 事件驱动：订阅回调 → 读快照 → 只追加"锚点之后"的新消息。
+			// 基线锚点 = userMsgs 最后一条（首次=null）：快照里锚点之后的消息才算新增，
+			// 插件启用前的旧消息只作锚不显示；逐条按文本去重防重复（compaction 导致
+			// 快照前部变化时仍正确——从锚点位置向后扫，跳过已存在的）。
 			function onSessionEvent() {
 				if (!binding || !binding.session) return;
 				let snapList = [];
 				try {
 					snapList = collectUserMessages(binding.session.getSnapshot());
 				} catch (e) { return; }
+				if (!snapList.length) return;
+				// 首次（无基线）：设锚 = 快照最后一条，不显示任何旧消息
+				if (!userMsgs.length) {
+					anchorText = snapList[snapList.length - 1];
+					rebuildRowMap();
+					return;
+				}
+				// 找锚点在快照中的位置，只处理锚点之后的部分
+				let start = 0;
+				for (let i = snapList.length - 1; i >= 0; i--) {
+					if (snapList[i] === anchorText) { start = i + 1; break; }
+				}
+				// 锚点丢失（compaction 修剪）→ 从尾部找与已记录最后一条相同的起点兜底
+				if (start === 0 && snapList[snapList.length - 1] !== anchorText) {
+					const last = userMsgs[userMsgs.length - 1];
+					for (let i = snapList.length - 1; i >= 0; i--) {
+						if (snapList[i] === last) { start = i + 1; break; }
+					}
+				}
 				let added = false;
-				for (let i = 0; i < snapList.length; i++) {
+				for (let i = start; i < snapList.length; i++) {
 					const t = snapList[i];
 					if (!t || userMsgs.includes(t)) continue;
 					userMsgs.push(t);
@@ -1066,6 +1092,7 @@ window.__ModuleLoader__.load({
 					added = true;
 				}
 				if (added) {
+					anchorText = userMsgs[userMsgs.length - 1];
 					saveStored(sessionId);
 					updateExpanded(expanded);
 					applyActive();
@@ -1086,8 +1113,12 @@ window.__ModuleLoader__.load({
 				if (!root) return;
 				cachedEls = Array.from(root.querySelectorAll('[data-chat-flow-kind="user"]'));
 				cachedEls.forEach((e, i) => {
-					const t = (e.textContent || "").trim().split("\n", 1)[0] || "";
-					if (t) rowMap[t] = i;
+					const full = (e.textContent || "").trim();
+					const first = full.split("\n", 1)[0] || "";
+					// 主键：首行完全相等
+					if (first) rowMap[first] = i;
+					// 次键：完整文本也建（长消息截断时首行可能被渲染截断）
+					if (full && full.length > first.length && full.length <= 200) rowMap[full] = i;
 				});
 				// 懒加载定位：目标刚被加载出来 → 立即定位
 				if (pendingTarget && rowMap[pendingTarget] !== undefined) {
