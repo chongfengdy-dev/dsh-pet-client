@@ -1045,20 +1045,30 @@ window.__ModuleLoader__.load({
 				});
 			}
 
-			// 事件驱动：订阅回调 → 读快照 → 与已记录对比，只 append 更新的消息。
-			// 锚点 = 已记录条数；快照 user 消息数更多 → 尾部新增（新消息总是 append 在尾部）。
-			// 无论有无新增都重建索引（持久化记录可能比 compaction 后快照多，提前 return 会漏建索引）。
+			// 事件驱动：订阅回调 → 读快照 → 与已记录对比，只 append 真正新增的消息。
+			// 不能按位置盲目追加——快照前部可能与已记录不同（compaction 修剪早期消息、
+			// steering 过滤差异），按位置取可能重复追加老消息。改为逐条按文本去重：
+			// 已在列表中的跳过，只在尾部真正的新消息才 append。
 			function onSessionEvent() {
 				if (!binding || !binding.session) return;
 				let snapList = [];
 				try {
 					snapList = collectUserMessages(binding.session.getSnapshot());
 				} catch (e) { return; }
-				if (snapList.length > userMsgs.length) {
-					// 从已记录位置起 append 新增
-					for (let i = userMsgs.length; i < snapList.length; i++) {
-						appendRow(snapList[i]);
-					}
+				let added = false;
+				for (let i = 0; i < snapList.length; i++) {
+					const t = snapList[i];
+					if (!t || userMsgs.includes(t)) continue;
+					userMsgs.push(t);
+					const r = buildRow(t, userMsgs.length - 1);
+					box.appendChild(r.row);
+					rows.push(r);
+					added = true;
+				}
+				if (added) {
+					saveStored(sessionId);
+					updateExpanded(expanded);
+					applyActive();
 				}
 				rebuildRowMap();
 			}
