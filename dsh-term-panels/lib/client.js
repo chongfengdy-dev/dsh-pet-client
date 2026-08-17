@@ -742,7 +742,7 @@ window.__ModuleLoader__.load({
 			root.id = HUD_ID;
 			Object.assign(root.style, {
 				position: "fixed", top: "14px", right: "14px", zIndex: "99992",
-				minWidth: "210px", padding: "10px 12px",
+				minWidth: "250px", padding: "10px 12px",
 				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
 				borderRadius: "10px",
@@ -783,10 +783,15 @@ window.__ModuleLoader__.load({
 		}
 		function renderHud(hud, state) {
 			hud.grid.textContent = "";
-			const row = (label, value, valueColor) => {
+			// 三列：名称 | 数据 | 金额（主定稿 2026-08-17）
+			// 列布局用 CSS grid（grid 容器已设 grid-template-columns: 1fr auto auto）
+			const row = (label, value, cost, valueColor) => {
 				const d = document.createElement("div");
 				Object.assign(d.style, {
-					display: "flex", justifyContent: "space-between", gap: "12px",
+					display: "grid",
+					gridTemplateColumns: "1fr auto auto",
+					columnGap: "10px",
+					alignItems: "baseline",
 				});
 				const l = document.createElement("span");
 				l.style.color = "var(--dsw-alias-label-tertiary)";
@@ -794,22 +799,32 @@ window.__ModuleLoader__.load({
 				const v = document.createElement("span");
 				v.style.fontFamily = 'Consolas, monospace';
 				v.style.color = valueColor || "var(--dsw-alias-label-primary)";
+				v.style.textAlign = "right";
 				v.textContent = value;
+				const c = document.createElement("span");
+				c.style.fontFamily = 'Consolas, monospace';
+				c.style.color = "var(--dsw-alias-label-primary)";
+				c.style.textAlign = "right";
+				c.style.minWidth = "52px";
+				c.textContent = cost;
 				d.appendChild(l);
 				d.appendChild(v);
+				d.appendChild(c);
 				return d;
 			};
 			// 六项：输入(命中) / 输入(未命中) / 命中率 / 输出 / 今日消耗 / 余额（主定稿 2026-08-17）
-			// 平台接口：inputHit/inputMiss 官方拆分；回落本地日志时命中=cacheRead，未命中=input-cacheRead
+			// 平台接口：inputHit/inputMiss 官方拆分，金额按类型官方精确值；
+			// 回落本地日志时命中=cacheRead，未命中=input-cacheRead，无金额
 			const hitTotal = state.inputHit !== undefined ? state.inputHit + state.inputMiss : state.input + state.cacheRead;
 			const hit = state.inputHit !== undefined ? state.inputHit : state.cacheRead;
 			const hitRate = hitTotal > 0 ? Math.round(hit / hitTotal * 100) : 0;
-			hud.grid.appendChild(row("输入·命中", fmt(hit)));
-			hud.grid.appendChild(row("输入·未命中", fmt(hitTotal - hit)));
-			hud.grid.appendChild(row("命中率", hitRate + "%"));
-			hud.grid.appendChild(row("输出", fmt(state.output)));
-			hud.grid.appendChild(row("今日消耗", state.cost !== null ? "¥" + state.cost.toFixed(2) : "—"));
-			hud.grid.appendChild(row("余额", state.balance !== null ? "¥" + state.balance : "…"));
+			const money = (n) => (n !== undefined && n !== null ? "¥" + Number(n).toFixed(2) : "—");
+			hud.grid.appendChild(row("输入（命中）", fmt(hit), money(state.inputHitCost)));
+			hud.grid.appendChild(row("输入（未命中）", fmt(hitTotal - hit), money(state.inputMissCost)));
+			hud.grid.appendChild(row("命中率", hitRate + "%", "—"));
+			hud.grid.appendChild(row("输出", fmt(state.output), money(state.outputCost)));
+			hud.grid.appendChild(row("今日消耗", "—", state.cost !== null ? "¥" + state.cost.toFixed(2) : "—"));
+			hud.grid.appendChild(row("余额", "—", state.balance !== null ? "¥" + state.balance : "…"));
 		}
 		function fmt(n) {
 			if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
@@ -824,8 +839,11 @@ window.__ModuleLoader__.load({
 				.then((data) => {
 					if (data && typeof data.inputHit === "number") {
 						state.inputHit = data.inputHit;
+						state.inputHitCost = data.inputHitCost;
 						state.inputMiss = data.inputMiss;
+						state.inputMissCost = data.inputMissCost;
 						state.output = data.output;
+						state.outputCost = data.outputCost;
 						state.cost = data.cost;
 						state.costCurrency = data.costCurrency || "CNY";
 					}
@@ -838,8 +856,11 @@ window.__ModuleLoader__.load({
 				.then((r) => r.json())
 				.then((data) => {
 					if (data && typeof data.input === "number") {
-						// 回落模式：未命中 = 总输入 - 命中（近似）；无今日消耗
+						// 回落模式：未命中 = 总输入 - 命中（近似）；无今日消耗与分项金额
 						state.inputHit = undefined;   // 标记回落，命中率用 cacheRead 口径
+						state.inputHitCost = undefined;
+						state.inputMissCost = undefined;
+						state.outputCost = undefined;
 						state.input = data.input;
 						state.output = data.output;
 						state.cacheRead = data.cacheRead;

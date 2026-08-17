@@ -317,18 +317,23 @@ function refreshPlatformUsage() {
     const cData = findDayData(cBiz.days, today);
     const hit = sumUsageType(aData, 'PROMPT_CACHE_HIT_TOKEN');
     const miss = sumUsageType(aData, 'PROMPT_CACHE_MISS_TOKEN');
+    // 金额按类型拆分（cost 接口同 type 枚举，HUD 三列：名称/数据/金额）
+    const hitCost = sumUsageType(cData, 'PROMPT_CACHE_HIT_TOKEN');
+    const missCost = sumUsageType(cData, 'PROMPT_CACHE_MISS_TOKEN');
+    const outCost = sumUsageType(cData, 'RESPONSE_TOKEN');
     platformUsageCache = {
       at: Date.now(),
       data: {
         source: 'platform',
         date: today,
         inputHit: hit,
+        inputHitCost: hitCost,
         inputMiss: miss,
+        inputMissCost: missCost,
         output: sumUsageType(aData, 'RESPONSE_TOKEN'),
+        outputCost: outCost,
         requests: sumUsageType(aData, 'REQUEST'),
-        cost: sumUsageType(cData, 'PROMPT_CACHE_HIT_TOKEN')
-          + sumUsageType(cData, 'PROMPT_CACHE_MISS_TOKEN')
-          + sumUsageType(cData, 'RESPONSE_TOKEN'),
+        cost: hitCost + missCost + outCost,
         costCurrency: cBiz.currency || 'CNY',
       },
       error: null,
