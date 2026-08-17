@@ -397,6 +397,9 @@ window.__ModuleLoader__.load({
 			// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时屏幕中央提示） ----------
 			buildZoomHud();
 
+			// ---------- 鼠标手势（右键：上拖到顶/下拖到底/先上后下刷新） ----------
+			buildMouseGesture();
+
 			// ---------- 点击外部收起面板（设置浮层算面板内部，不收起） ----------
 			document.addEventListener("click", (e) => {
 				const t = e.target;
@@ -787,6 +790,74 @@ window.__ModuleLoader__.load({
 			}, { passive: true });
 			document.addEventListener("keydown", (e) => {
 				if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "0")) show();
+			});
+		}
+
+		// ---------- 鼠标手势（右键拖动）：上拖到页顶 / 下拖到页底 / 先上后下刷新 ----------
+		// 浏览器式手势：按住右键拖动，累计位移判定方向；方向反转（先上后下）= 刷新页面。
+		// 移动超过阈值才算手势（防误触）；手势中才拦截右键菜单，普通右键点击不影响。
+		function buildMouseGesture() {
+			const THRESHOLD = 30;      // 手势有效位移（px）
+			const REVERSE = 20;        // 反向判定阈值（px）
+			let startY = 0, lastY = 0;
+			let totalDy = 0;           // 累计位移（正=向下，最终决定滚顶/滚底）
+			let phase = "none";        // none|up|down|reversed
+			let active = false;        // 手势进行中（超过阈值后）
+
+			// 找到可滚动的最近容器（优先鼠标所在滚动区，兜底整个页面）
+			function findScrollable(el) {
+				let cur = el;
+				while (cur && cur !== document.documentElement && cur !== document.body) {
+					const s = getComputedStyle(cur);
+					if (cur.scrollHeight > cur.clientHeight && /(auto|scroll|overlay)/.test(s.overflowY)) return cur;
+					cur = cur.parentElement;
+				}
+				return document.scrollingElement || document.documentElement;
+			}
+
+			document.addEventListener("mousedown", (e) => {
+				if (e.button !== 2) return;   // 仅右键
+				startY = lastY = e.clientY;
+				totalDy = 0;
+				phase = "none";
+				active = false;
+			});
+			document.addEventListener("mousemove", (e) => {
+				if (e.buttons !== 2) return;   // 右键未按住则忽略
+				const dy = e.clientY - lastY;
+				lastY = e.clientY;
+				totalDy += dy;
+				if (!active && Math.abs(totalDy) >= THRESHOLD) active = true;
+				if (!active) return;
+				// 初始方向
+				if (phase === "none") {
+					phase = totalDy < 0 ? "up" : "down";
+				} else if (phase !== "reversed") {
+					// 用"最近位移段"判反转：先上后下 / 先下后上
+					if (phase === "up" && dy > REVERSE) phase = "reversed";
+					else if (phase === "down" && dy < -REVERSE) phase = "reversed";
+				}
+			});
+			document.addEventListener("mouseup", (e) => {
+				if (e.button !== 2) return;
+				if (!active) return;
+				const sc = findScrollable(e.target);
+				if (phase === "reversed") {
+					// 先上后下（或先下后上）→ 刷新页面
+					location.reload();
+				} else if (totalDy < 0) {
+					// 上拖 → 页顶
+					sc.scrollTop = 0;
+				} else {
+					// 下拖 → 页底
+					sc.scrollTop = sc.scrollHeight;
+				}
+				active = false;
+				phase = "none";
+			});
+			// 手势中拦截右键菜单；未移动的普通右键放行
+			document.addEventListener("contextmenu", (e) => {
+				if (active) e.preventDefault();
 			});
 		}
 
