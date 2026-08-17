@@ -976,6 +976,7 @@ window.__ModuleLoader__.load({
 			let binding = null;      // { session: { getSnapshot, subscribe } }
 			let unsubscribe = null;  // 当前会话订阅退订函数（会话切换时释放）
 			let userMsgs = [];       // string[]（我的消息首行文本，仅订阅后新增）
+			let anchorText = null;   // 已记录的最后一条消息文本（增量锚点；null=未初始化）
 			let activeIdx = -1;      // 当前点击/选中的消息下标（-1=无，横杠+文字变蓝）
 			let rows = [];           // {row, bar, num, txt, idx} 行引用（颜色状态更新用）
 			let expanded = false;    // 是否展开（平时只显示横杠，hover 展开显示行号+文本）
@@ -991,56 +992,50 @@ window.__ModuleLoader__.load({
 				// 会话切换：退订旧会话订阅，清空记录，重新绑定新会话
 				if (unsubscribe) { try { unsubscribe(); } catch (e) {} unsubscribe = null; }
 				sessionId = sid;
-				if (sid === null) { binding = null; userMsgs = []; rows = []; renderRows(); return; }
-				userMsgs = []; rows = [];
+				if (sid === null) { binding = null; resetAnchor(); return; }
 				try { binding = sessions.binding(sid); } catch (e) { binding = null; }
 				if (binding && binding.session && binding.session.subscribe) {
 					try { unsubscribe = binding.session.subscribe(onSessionEvent); } catch (e) {}
 				}
-				renderRows();
+				resetAnchor();
 			}
 
-			// 纯事件流订阅：开会话即开始记录，来一条记一条（不读快照基线、不拉 history、不轮询）。
-			// 回调兼容两种形态：(session, event) / (event)；同时用快照增量兜底——
-			// 以"已记录的最后一条"为锚点，快照里比锚点新的才 append（旧消息不显示）。
-			function onSessionEvent(evt, maybeEvent) {
-				let ev = null;
-				if (maybeEvent) ev = maybeEvent;
-				else if (evt && (evt.event || evt.type === "user/message")) ev = evt.event || evt;
-				// 事件形态：直接取 event 处理
-				if (ev) {
-					if (ev.type !== "user/message") return;
-					const srcKind = ev.data && ev.data.source && ev.data.source.kind;
-					if (srcKind !== undefined && srcKind !== "user") return;
-					const text = extractFirstLine(ev.data);
-					if (text) { appendRow(text); return; }
-				}
-				// 兜底：快照增量（回调可能是无参通知）
-				appendSnapshotDelta();
-			}
-
-			// 快照增量兜底：以已记录的最后一条为锚，只取快照里更新的（旧消息不显示）
-			function appendSnapshotDelta() {
+			// 纯事件驱动：订阅回调（不依赖回调参数，各层签名不一致不可靠）→ 读快照
+			// 与已记录对比，只 append 更新的消息。开会话即开始记录，来一条记一条；
+			// 首次快照里的旧消息只作锚点不显示（插件加载前/compaction 前的不显示）。
+			function onSessionEvent() {
 				if (!binding || !binding.session) return;
 				let snapList = [];
 				try {
 					snapList = collectUserMessages(binding.session.getSnapshot());
 				} catch (e) { return; }
 				if (!snapList.length) return;
-				let anchor = userMsgs.length ? userMsgs[userMsgs.length - 1] : null;
-				let start = anchor === null ? snapList.length : -1;
-				if (anchor !== null) {
-					// 找锚点在快照中的位置，其后为新增
-					for (let i = snapList.length - 1; i >= 0; i--) {
-						if (snapList[i] === anchor) { start = i + 1; break; }
-					}
-					if (start === -1) start = 0; // 锚点丢失（compaction）→ 从快照尾部追加不重复的
+				// 首次：无已记录 → 把快照最后一条作为锚点但不显示（旧消息不显示）
+				if (anchorText === null) {
+					anchorText = snapList[snapList.length - 1];
+					return;
 				}
+				// 找锚点在快照中的位置，其后为新增（新消息总是 append 在尾部）
+				let start = snapList.length;
+				for (let i = snapList.length - 1; i >= 0; i--) {
+					if (snapList[i] === anchorText) { start = i + 1; break; }
+				}
+				if (start === snapList.length) return; // 无新增
 				for (let i = start; i < snapList.length; i++) {
 					appendRow(snapList[i]);
 				}
+				anchorText = snapList[snapList.length - 1];
 			}
 
+			// 会话切换/重建：重置锚点（新会话的旧消息不显示，重新开始记录）
+			function resetAnchor() {
+				anchorText = null;
+				userMsgs = [];
+				rows = [];
+				renderRows();
+			}
+
+			// 追加一行记录（来一条记一条）
 			function appendRow(text) {
 				userMsgs.push(text);
 				// 移除空状态占位
@@ -1072,22 +1067,6 @@ window.__ModuleLoader__.load({
 					if (t) out.push(t);
 				}
 				return out;
-			}
-
-			function extractFirstLine(dd) {
-				if (!dd) return "";
-				let text = "";
-				const content = dd.content || (dd.message && dd.message.content) || [];
-				if (Array.isArray(content)) {
-					for (const b of content) {
-						if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
-							text += b.text + "\n";
-						}
-					}
-				} else if (typeof dd.text === "string") {
-					text = dd.text;
-				}
-				return text.trim().split("\n", 1)[0] || "";
 			}
 
 			// 渲染全部行（展开时全部显示+滚动条；收起时只显示最近 10 条横杠，见 updateExpanded）
