@@ -988,7 +988,7 @@ window.__ModuleLoader__.load({
 				const sid = currentSessionId();
 				if (sid === sessionId && binding) { rebuild(); return; }
 				sessionId = sid;
-				if (sid === null) { binding = null; userMsgs = []; renderRows(); return; }
+				if (sid === null) { binding = null; userMsgs = []; rows = []; renderRows(); return; }
 				try { binding = sessions.binding(sid); } catch (e) { binding = null; }
 				if (binding && binding.session && binding.session.subscribe) {
 					try { binding.session.subscribe(() => rebuild()); } catch (e) {}
@@ -996,15 +996,44 @@ window.__ModuleLoader__.load({
 				rebuild();
 			}
 
+			// 增量记录：不拉 history、不轮询。每次订阅触发（来新消息）拿快照，
+			// 与已记录列表尾部对齐，只把新增的 append（来一条加一条）。
+			// 首次：快照里 compaction 后剩余的最近几条作为初始基线。
+			// 会话切换 / compaction 修剪旧消息导致尾部对不上时，才全量重建。
 			function rebuild() {
-				if (!binding || !binding.session) { userMsgs = []; }
-				else {
-					try {
-						const snap = binding.session.getSnapshot();
-						userMsgs = collectUserMessages(snap);
-					} catch (e) { userMsgs = []; }
+				if (!binding || !binding.session) { userMsgs = []; return; }
+				let snapList = [];
+				try {
+					snapList = collectUserMessages(binding.session.getSnapshot());
+				} catch (e) { return; }
+				if (!userMsgs.length) {
+					// 首次（或会话刚切换清空）：快照剩余全部作为基线
+					userMsgs = snapList;
+					renderRows();
+					return;
 				}
-				renderRows();
+				// 尾部对齐：snapList 尾部应与已记录完全匹配（新消息总是 append 在尾部）
+				let i = snapList.length - 1;
+				let j = userMsgs.length - 1;
+				while (i >= 0 && j >= 0 && snapList[i] === userMsgs[j]) { i--; j--; }
+				if (j >= 0) {
+					// 已记录有未被匹配的（compaction 修剪了旧消息或会话内容变化）→ 以快照为准全量重建
+					userMsgs = snapList;
+					renderRows();
+					return;
+				}
+				// 增量：append 快照尾部新增的行
+				const added = snapList.slice(i + 1);
+				if (!added.length) return;
+				const base = userMsgs.length;
+				userMsgs.push(...added);
+				for (let k = base; k < userMsgs.length; k++) {
+					const r = buildRow(userMsgs[k], k);
+					box.appendChild(r.row);
+					rows.push(r);
+				}
+				updateExpanded(expanded);
+				applyActive();
 			}
 
 			function collectUserMessages(snap) {
