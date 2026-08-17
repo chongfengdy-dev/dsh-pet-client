@@ -975,8 +975,7 @@ window.__ModuleLoader__.load({
 			let sessionId = null;
 			let binding = null;      // { session: { getSnapshot, subscribe } }
 			let unsubscribe = null;  // 当前会话订阅退订函数（会话切换时释放）
-			let userMsgs = [];       // string[]（我的消息首行文本，服务端持久化）
-			let anchorText = null;   // 基线锚点（首次=null：设锚不显示旧消息；之后只追加快照锚点之后的新消息）
+			let userMsgs = [];       // string[]（我的消息首行文本，快照全量同步）
 			let activeIdx = -1;      // 当前点击/选中的消息下标（-1=无，横杠+文字变蓝）
 			let rows = [];           // {row, bar, num, txt, idx} 行引用（颜色状态更新用）
 			let expanded = false;    // 是否展开（平时只显示横杠，hover 展开显示行号+文本）
@@ -992,20 +991,6 @@ window.__ModuleLoader__.load({
 					.then((data) => { cb(Array.isArray(data.list) ? data.list : []); })
 					.catch(() => { cb([]); });
 			}
-			let saveTimer = null;
-			function saveStored(sid) {
-				clearTimeout(saveTimer);
-				saveTimer = setTimeout(() => {
-					try {
-						fetch(OUTLINE_HISTORY_URL, {
-							method: "POST",
-							headers: { "Content-Type": "application/json" },
-							body: JSON.stringify({ sessionId: sid, list: userMsgs }),
-							mode: "cors",
-						}).catch(() => {});
-					} catch (e) {}
-				}, 300);
-			}
 
 			function currentSessionId() {
 				const snap = sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
@@ -1015,7 +1000,7 @@ window.__ModuleLoader__.load({
 			function rebind() {
 				const sid = currentSessionId();
 				if (sid === sessionId && binding) return;
-				// 会话切换：退订旧会话订阅，重新绑定新会话（记录按会话持久化）
+				// 会话切换：退订旧会话订阅，重新绑定新会话
 				if (unsubscribe) { try { unsubscribe(); } catch (e) {} unsubscribe = null; }
 				sessionId = sid;
 				if (sid === null) { binding = null; userMsgs = []; rows = []; renderRows(); return; }
@@ -1026,78 +1011,59 @@ window.__ModuleLoader__.load({
 					try { unsubscribe = binding.session.subscribe(onSessionEvent); } catch (e) {}
 				}
 				renderRows();
-				anchorText = null;
-				// 从服务端恢复该会话历史（关机重启也能找回）
+				// 先显示服务端恢复的记录（启动即时可见），随后快照全量同步覆盖为真实全部
 				loadStored(sid, (list) => {
 					if (sid !== sessionId) return; // 已切走，忽略
 					if (!list.length) return;
-					// 服务端有记录：合并（跳过已存在的），补齐渲染；锚点 = 恢复列表最后一条，
-					// 之后 onSessionEvent 只追加快照中更新的消息（不重复不拉旧）
 					let added = false;
 					for (const t of list) {
-						if (userMsgs.includes(t)) continue;
+						if (!t || userMsgs.includes(t)) continue;
 						userMsgs.push(t);
 						const r = buildRow(t, userMsgs.length - 1);
 						box.appendChild(r.row);
 						rows.push(r);
 						added = true;
 					}
-					if (added) {
-						anchorText = userMsgs[userMsgs.length - 1];
-						updateExpanded(expanded);
-						applyActive();
-					}
-					// 服务端记录补齐后再同步快照增量
-					onSessionEvent();
+					if (added) { updateExpanded(expanded); applyActive(); }
 				});
+				// 快照全量同步（含全部历史，按时间序，覆盖服务端记录）
+				onSessionEvent();
 			}
 
-			// 事件驱动：订阅回调 → 读快照 → 只追加"锚点之后"的新消息。
-			// 基线锚点 = userMsgs 最后一条（首次=null）：快照里锚点之后的消息才算新增，
-			// 插件启用前的旧消息只作锚不显示；逐条按文本去重防重复（compaction 导致
-			// 快照前部变化时仍正确——从锚点位置向后扫，跳过已存在的）。
+			// 快照全量同步（主定稿 2026-08-17）：快照 = 对话区已加载全部消息（时间序）。
+			// 每次订阅/DOM 变化：取快照全部 user 消息 → 整体替换列表（天然去重+时间排序，
+			// 含插件启用前的历史，全部可跳转）。hasMore=true 时循环 loadOlder 加载全部。
 			function onSessionEvent() {
 				if (!binding || !binding.session) return;
 				let snapList = [];
+				let snapHasMore = false;
 				try {
-					snapList = collectUserMessages(binding.session.getSnapshot());
+					const snap = binding.session.getSnapshot();
+					snapList = collectUserMessages(snap);
+					snapHasMore = !!(snap && snap.hasMore);
 				} catch (e) { return; }
-				if (!snapList.length) return;
-				// 首次（无基线）：设锚 = 快照最后一条，不显示任何旧消息
-				if (!userMsgs.length) {
-					anchorText = snapList[snapList.length - 1];
-					rebuildRowMap();
-					return;
+				// 整体替换（去重：跳过空文本；顺序 = 快照时间序）
+				const next = [];
+				const seen = new Set();
+				for (const t of snapList) {
+					if (!t || seen.has(t)) continue;
+					seen.add(t);
+					next.push(t);
 				}
-				// 找锚点在快照中的位置，只处理锚点之后的部分
-				let start = 0;
-				for (let i = snapList.length - 1; i >= 0; i--) {
-					if (snapList[i] === anchorText) { start = i + 1; break; }
-				}
-				// 锚点丢失（compaction 修剪）→ 从尾部找与已记录最后一条相同的起点兜底
-				if (start === 0 && snapList[snapList.length - 1] !== anchorText) {
-					const last = userMsgs[userMsgs.length - 1];
-					for (let i = snapList.length - 1; i >= 0; i--) {
-						if (snapList[i] === last) { start = i + 1; break; }
+				// 内容变化才重建 DOM
+				let changed = next.length !== userMsgs.length;
+				if (!changed) {
+					for (let i = 0; i < next.length; i++) {
+						if (next[i] !== userMsgs[i]) { changed = true; break; }
 					}
 				}
-				let added = false;
-				for (let i = start; i < snapList.length; i++) {
-					const t = snapList[i];
-					if (!t || userMsgs.includes(t)) continue;
-					userMsgs.push(t);
-					const r = buildRow(t, userMsgs.length - 1);
-					box.appendChild(r.row);
-					rows.push(r);
-					added = true;
-				}
-				if (added) {
-					anchorText = userMsgs[userMsgs.length - 1];
-					saveStored(sessionId);
-					updateExpanded(expanded);
-					applyActive();
+				if (changed) {
+					userMsgs = next;
+					renderRows();
 				}
 				rebuildRowMap();
+				// 还有更早历史 → 继续加载（loadOlder 分页；DOM 变化会再触发 sync）
+				if (snapHasMore) maybeLoadOlder();
 			}
 
 			// 文本 → DOM user 行号索引：数据/DOM 变化时重建（点击时 O(1) 查表，不遍历）
@@ -1185,13 +1151,12 @@ window.__ModuleLoader__.load({
 				return out;
 			}
 
-			// 追加一行记录（来一条记一条），并持久化
+			// 追加一行记录（保留备用：单条 append 用）
 			function appendRow(text) {
 				userMsgs.push(text);
 				const r = buildRow(text, userMsgs.length - 1);
 				box.appendChild(r.row);
 				rows.push(r);
-				saveStored(sessionId);
 				updateExpanded(expanded);
 				applyActive();
 			}
