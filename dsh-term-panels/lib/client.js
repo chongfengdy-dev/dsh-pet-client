@@ -799,6 +799,7 @@ window.__ModuleLoader__.load({
 		function buildMouseGesture() {
 			const THRESHOLD = 30;      // 手势有效位移（px）
 			const REVERSE = 20;        // 反向判定阈值（px）
+			const SEG_MIN = 40;         // 刷新手势每段最小长度（px）
 			const MOVE_MENU = 5;       // 移动超过该值即视为拖动（阻止右键菜单）
 			let startX = 0, startY = 0, lastY = 0;
 			let totalDy = 0;           // 累计位移（正=向下，最终决定滚顶/滚底）
@@ -882,23 +883,37 @@ window.__ModuleLoader__.load({
 					showTrail(e.clientX, e.clientY);
 				}
 				if (!active && Math.abs(totalDy) >= THRESHOLD) active = true;
-				if (!active) return;
-				// 初始方向
-				if (phase === "none") {
-					phase = totalDy < 0 ? "up" : "down";
-				} else if (phase !== "reversed") {
-					// 用"最近位移段"判反转：先上后下 / 先下后上
-					if (phase === "up" && dy > REVERSE) phase = "reversed";
-					else if (phase === "down" && dy < -REVERSE) phase = "reversed";
-				}
 			});
+			// 路径分析：严格"先上后下"（每段在 60° 锥内）才刷新
+			// 上段：从起点向上累计 >= SEG_MIN，方向在屏幕正上方 60° 锥内（偏差 <= 30°）
+			// 下段：上段之后向下累计 >= SEG_MIN，方向在正下方 60° 锥内
+			function isRefreshGesture() {
+				const pts = pathPoints;
+				if (pts.length < 6) return false;
+				const TAN30 = Math.tan(Math.PI / 6);   // ~0.577，30° 对应 |dx|<=|dy|*tan30
+				// 找上段结束点：从起点看，累计向上达到 SEG_MIN 且 |dx|<=|dy|*TAN30
+				let upEnd = -1;
+				for (let i = 1; i < pts.length; i++) {
+					const dy = pts[0][1] - pts[i][1];       // 向上为正
+					const dx = Math.abs(pts[i][0] - pts[0][0]);
+					if (dy >= SEG_MIN && dx <= dy * TAN30) { upEnd = i; break; }
+				}
+				if (upEnd < 0) return false;
+				// 找下段：上段结束点之后，向下累计达到 SEG_MIN 且 60° 锥内
+				for (let j = upEnd + 1; j < pts.length; j++) {
+					const dy = pts[j][1] - pts[upEnd][1];   // 向下为正
+					const dx = Math.abs(pts[j][0] - pts[upEnd][0]);
+					if (dy >= SEG_MIN && dx <= dy * TAN30) return true;
+				}
+				return false;
+			}
 			document.addEventListener("mouseup", (e) => {
 				if (e.button !== 2) return;
 				hideTrail();
 				if (!active) return;
 				const sc = findScrollable(e.target);
-				if (phase === "reversed") {
-					// 先上后下（或先下后上）→ 刷新页面
+				if (isRefreshGesture()) {
+					// 严格先上后下（60° 锥内）→ 刷新页面
 					location.reload();
 				} else if (totalDy < 0) {
 					// 上拖 → 页顶
