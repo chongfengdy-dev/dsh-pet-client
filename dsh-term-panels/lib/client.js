@@ -1090,14 +1090,15 @@ window.__ModuleLoader__.load({
 
 			// ---- hover 展开 / 收起（同一元素：横杠列 ↔ 完整大纲） ----
 			// 收起：只显示最近 10 条消息的横杠（其余整行隐藏）；展开：全部消息 bar+num+txt
+			// 展开样式：纯色背景（去掉半透明+模糊，主定稿 2026-08-17）
 			function updateExpanded(on) {
 				expanded = on;
-				// 展开：宽度 400px + 与 Token HUB 同款半透明+模糊；收起：透明细列
+				// 展开：宽度 400px + 纯色背景（不透明，去模糊）；收起：透明细列
 				box.style.width = on ? "400px" : "auto";
-				box.style.background = on ? "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)" : "transparent";
+				box.style.background = on ? "var(--dsw-alias-bg-layer-2)" : "transparent";
 				box.style.borderColor = on ? "var(--dsw-alias-border-l2)" : "transparent";
 				box.style.boxShadow = on ? "0 4px 16px rgba(0,0,0,.22)" : "none";
-				box.style.backdropFilter = on ? "blur(4px)" : "none";
+				box.style.backdropFilter = on ? "none" : "none";
 				head.style.display = (on && msgs.length > 0) ? "flex" : "none";
 				for (const r of rows) {
 					const recent = msgs.length - r.idx <= 10;   // 最近 10 条
@@ -1127,15 +1128,21 @@ window.__ModuleLoader__.load({
 				const root = findChatRoot();
 				if (!root) return;
 				const els = root.querySelectorAll('[data-chat-flow-kind="user"]');
-				const el = els[globalIdx];
-				if (!el) return;
 				const container = findScrollContainer(root);
+				const el = els[globalIdx];
+				if (!el) {
+					// DOM 里没有对应行（最后一条往往是最新消息，DOM 行可能尚未渲染）：
+					// 兜底直接滚到容器底部
+					if (container) container.scrollTop = container.scrollHeight;
+					else root.scrollIntoView({ block: "end" });
+					return;
+				}
 				if (container) {
 					const cr = container.getBoundingClientRect();
 					const tr = el.getBoundingClientRect();
-					container.scrollTo({ top: container.scrollTop + tr.top - cr.top - 12, behavior: "smooth" });
+					container.scrollTop = container.scrollTop + tr.top - cr.top - 12; // 瞬间定位
 				} else {
-					el.scrollIntoView({ behavior: "smooth", block: "start" });
+					el.scrollIntoView({ block: "start" }); // 瞬间定位
 				}
 			}
 
