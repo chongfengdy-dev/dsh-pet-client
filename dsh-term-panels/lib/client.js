@@ -800,6 +800,7 @@ window.__ModuleLoader__.load({
 			const THRESHOLD = 30;      // 手势有效位移（px）
 			const REVERSE = 20;        // 反向判定阈值（px）
 			const SEG_MIN = 40;         // 刷新手势每段最小长度（px）
+			const TAN30 = Math.tan(Math.PI / 6);   // 30° 锥：|dx| <= |dy| * tan30
 			const MOVE_MENU = 5;       // 移动超过该值即视为拖动（阻止右键菜单）
 			let startX = 0, startY = 0, lastY = 0;
 			let totalDy = 0;           // 累计位移（正=向下，最终决定滚顶/滚底）
@@ -807,11 +808,10 @@ window.__ModuleLoader__.load({
 			let active = false;        // 手势进行中（超过阈值后）
 			let moved = false;         // 是否已拖动（阻止右键菜单）
 
-			// 拖行轨迹：SVG 折线绘制鼠标实际行进路径（起点圆点 + 完整路径）
+			// 拖行轨迹：SVG 折线绘制鼠标实际行进路径
 			const NS = "http://www.w3.org/2000/svg";
 			const trailSvg = document.createElementNS(NS, "svg");
 			const path = document.createElementNS(NS, "polyline");
-			const dot = document.createElement("div");
 			const BLUE = getComputedStyle(document.documentElement).getPropertyValue("--dsw-alias-state-business-primary").trim() || "#4d6bfe";
 			// 不用 viewBox：用户坐标 = 像素坐标（polyline 点直接用 clientX/clientY）
 			Object.assign(trailSvg.style, {
@@ -825,15 +825,7 @@ window.__ModuleLoader__.load({
 			path.setAttribute("stroke-linejoin", "round");
 			path.setAttribute("opacity", "0.7");
 			trailSvg.appendChild(path);
-			Object.assign(dot.style, {
-				position: "fixed", left: "0", top: "0", zIndex: "99999",
-				width: "8px", height: "8px", borderRadius: "50%",
-				background: BLUE,
-				opacity: ".7", pointerEvents: "none", display: "none",
-				transform: "translate(-50%, -50%)",
-			});
 			document.body.appendChild(trailSvg);
-			document.body.appendChild(dot);
 			let pathPoints = [];   // [[x,y],...] 实际行进点
 			function showTrail(x, y) {
 				// 节流：与上一个点距离够大才记录（避免密集噪点）
@@ -843,13 +835,9 @@ window.__ModuleLoader__.load({
 					path.setAttribute("points", pathPoints.map((p) => p[0] + "," + p[1]).join(" "));
 				}
 				trailSvg.style.display = "block";
-				dot.style.display = "block";
-				dot.style.left = x + "px";
-				dot.style.top = y + "px";
 			}
 			function hideTrail() {
 				trailSvg.style.display = "none";
-				dot.style.display = "none";
 				pathPoints = [];
 				path.setAttribute("points", "");
 			}
@@ -890,7 +878,6 @@ window.__ModuleLoader__.load({
 			function isRefreshGesture() {
 				const pts = pathPoints;
 				if (pts.length < 6) return false;
-				const TAN30 = Math.tan(Math.PI / 6);   // ~0.577，30° 对应 |dx|<=|dy|*tan30
 				// 找上段结束点：从起点看，累计向上达到 SEG_MIN 且 |dx|<=|dy|*TAN30
 				let upEnd = -1;
 				for (let i = 1; i < pts.length; i++) {
@@ -907,6 +894,20 @@ window.__ModuleLoader__.load({
 				}
 				return false;
 			}
+			// 总体方向：起点→终点的位移向量，判断是否在正上/正下 60° 锥内
+			// 返回 "up"（正上方锥内）| "down"（正下方锥内）| null（斜向/横向，不动作）
+			function overallDirection() {
+				const pts = pathPoints;
+				if (pts.length < 2) return null;
+				const sx = pts[0][0], sy = pts[0][1];
+				const ex = pts[pts.length - 1][0], ey = pts[pts.length - 1][1];
+				const dy = sy - ey;            // 向上为正
+				const dx = Math.abs(ex - sx);
+				if (dy >= SEG_MIN && dx <= dy * TAN30) return "up";
+				const dyD = ey - sy;           // 向下为正
+				if (dyD >= SEG_MIN && dx <= dyD * TAN30) return "down";
+				return null;
+			}
 			document.addEventListener("mouseup", (e) => {
 				if (e.button !== 2) return;
 				hideTrail();
@@ -915,12 +916,14 @@ window.__ModuleLoader__.load({
 				if (isRefreshGesture()) {
 					// 严格先上后下（60° 锥内）→ 刷新页面
 					location.reload();
-				} else if (totalDy < 0) {
-					// 上拖 → 页顶
-					sc.scrollTop = 0;
 				} else {
-					// 下拖 → 页底
-					sc.scrollTop = sc.scrollHeight;
+					// 上/下拖需在正上/正下 60° 锥内；斜向/横向不动作
+					const dir = overallDirection();
+					if (dir === "up") {
+						sc.scrollTop = 0;
+					} else if (dir === "down") {
+						sc.scrollTop = sc.scrollHeight;
+					}
 				}
 				active = false;
 				phase = "none";
