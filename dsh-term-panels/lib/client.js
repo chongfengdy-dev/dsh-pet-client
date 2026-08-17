@@ -1148,7 +1148,7 @@ window.__ModuleLoader__.load({
 				background: "transparent", border: "1px solid transparent",
 				cursor: "pointer",
 				transition: "background .15s ease, border-color .15s ease",
-				maxHeight: "300px", overflowY: "auto",
+				maxHeight: "260px", overflowY: "auto",
 				fontSize: "14px",
 				visibility: "hidden", // 定位到对话区左内缘前不显示
 			});
@@ -1401,6 +1401,15 @@ window.__ModuleLoader__.load({
 					r.row.style.display = (on || recent) ? "flex" : "none";
 					r.num.style.display = (on && !numHiddenByLoad) ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
+				}
+				// 展开时滚动到底部（双 rAF 等布局完成）：第一眼是最近 10 条（与收起位置一致），
+				// 滚动条可上滚看更早的消息
+				if (on) {
+					requestAnimationFrame(() => {
+						requestAnimationFrame(() => {
+							box.scrollTop = box.scrollHeight;
+						});
+					});
 				}
 			}
 			box.addEventListener("mouseover", () => updateExpanded(true));
