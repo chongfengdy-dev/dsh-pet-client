@@ -900,10 +900,14 @@ window.__ModuleLoader__.load({
 		const OUTLINE_PANEL_ID = "dsh-msg-outline-panel";
 		const OUTLINE_FLASH = "dsh-msg-outline-flash";
 
-				function buildMessageOutline(ctx) {
-			// 2026-08-17 v2：DOM 驱动方案（不依赖 sessions 服务注入，避免环境差异导致
-			// 数据拿不到）——轮询对话区 [data-chat-flow-kind="user"] 节点（dsh 渲染契约，
-			// 即我发的消息行），文本取首行；位置跟随对话区左缘（左侧侧边栏右面）。
+						function buildMessageOutline(ctx) {
+			// 2026-08-17 v3：完整三段式（照 DeepSeek 网页版给主整理的蓝图实现）——
+			// ① 解析：扫描对话区 [data-chat-flow-kind="user"] 行（我的消息，dsh 渲染契约）
+			//    生成大纲（行号+首行文本，超长截断…）；
+			// ② 点击：平滑滚动定位到对应消息行 + 黄色高亮闪烁；
+			// ③ 滚动高亮（Scroll Spy）：Intersection Observer（rootMargin -80%）
+			//    监测消息行进入阅读区 → 大纲对应行自动高亮（浅蓝底+蓝字+左边框）。
+			// 位置：对话区左缘（左侧侧边栏右面），一列细横杠无感缝合，hover 展开面板。
 			if (document.getElementById(OUTLINE_RAIL_ID)) return; // 已注入
 
 			// ---- 左缘横杠条 ----
@@ -926,7 +930,7 @@ window.__ModuleLoader__.load({
 			Object.assign(panel.style, {
 				position: "fixed", left: "24px", top: "50%",
 				transform: "translateY(-50%)", zIndex: "99990",
-				width: "290px", maxHeight: "72vh",
+				width: "300px", maxHeight: "72vh",
 				display: "none", flexDirection: "column",
 				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
@@ -957,7 +961,11 @@ window.__ModuleLoader__.load({
 
 			// ---- 状态 ----
 			let userMsgs = [];        // string[]（我的消息首行文本）
-			let lastRows = 0;         // 上次扫描到的 user 行数（变化才重渲染）
+			let rowEls = [];          // {row, num, txt}（面板行引用，active 更新不重建）
+			let activeIdx = -1;       // 当前阅读位置的消息下标（-1=无）
+			let lastRows = -1;
+			let spyObserver = null;
+			let spyRoot = null;
 
 			function findChatRoot() {
 				return document.querySelector('[data-slot="conversation"]');
@@ -973,17 +981,16 @@ window.__ModuleLoader__.load({
 				return null;
 			}
 
+			// ---- ① 解析：扫描对话区我的消息行 ----
 			function scan() {
 				const root = findChatRoot();
-				if (!root) { return; }
-				// rail 位置跟随对话区左缘（侧边栏右面）
+				if (!root) return;
 				try {
 					const r = root.getBoundingClientRect();
 					if (r.width > 0) rail.style.left = Math.max(0, r.left - 22) + "px";
 				} catch (e) {}
-				// 提取我的消息（data-chat-flow-kind="user" 行，首行文本）
 				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
-				if (rows.length === lastRows && userMsgs.length === rows.length) return; // 无变化
+				if (rows.length === lastRows) return;
 				lastRows = rows.length;
 				userMsgs = [];
 				for (const el of rows) {
@@ -991,6 +998,7 @@ window.__ModuleLoader__.load({
 					if (t) userMsgs.push(t);
 				}
 				renderAll();
+				ensureSpy(root);
 			}
 
 			function renderAll() {
@@ -1021,6 +1029,7 @@ window.__ModuleLoader__.load({
 
 			function renderPanel() {
 				pList.textContent = "";
+				rowEls = [];
 				pCount.textContent = userMsgs.length ? String(userMsgs.length) + " 条" : "";
 				if (!userMsgs.length) {
 					const e = document.createElement("div");
@@ -1034,11 +1043,14 @@ window.__ModuleLoader__.load({
 					Object.assign(row.style, {
 						display: "flex", gap: "8px", padding: "6px 10px",
 						borderRadius: "8px", cursor: "pointer", alignItems: "baseline",
+						borderLeft: "3px solid transparent",
 					});
-					row.onmouseenter = () => { row.style.background = "var(--dsw-alias-interactive-bg-hover)"; };
-					row.onmouseleave = () => { row.style.background = "transparent"; };
+					row.onmouseenter = () => {
+						if (activeIdx !== idx) row.style.background = "var(--dsw-alias-interactive-bg-hover)";
+					};
+					row.onmouseleave = () => { applyActive(); };
 					const num = document.createElement("span");
-					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;color:var(--dsw-alias-label-tertiary);min-width:24px;text-align:right";
+					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;min-width:24px;text-align:right";
 					num.textContent = String(idx + 1);
 					const txt = document.createElement("span");
 					txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
@@ -1049,9 +1061,12 @@ window.__ModuleLoader__.load({
 					row.appendChild(txt);
 					row.addEventListener("click", () => scrollToMessage(idx));
 					pList.appendChild(row);
+					rowEls.push({ row, num, txt });
 				});
+				applyActive();
 			}
 
+			// ---- ② 点击：平滑滚动定位 + 高亮闪烁 ----
 			function scrollToMessage(userIndex) {
 				const root = findChatRoot();
 				if (!root) return;
@@ -1062,12 +1077,51 @@ window.__ModuleLoader__.load({
 				if (container) {
 					const cr = container.getBoundingClientRect();
 					const tr = el.getBoundingClientRect();
-					container.scrollTo({ top: container.scrollTop + tr.top - cr.top - 12 });
+					container.scrollTo({ top: container.scrollTop + tr.top - cr.top - 12, behavior: "smooth" });
 				} else {
-					el.scrollIntoView({ block: "start" });
+					el.scrollIntoView({ behavior: "smooth", block: "start" });
 				}
+				setActive(userIndex);
 				el.classList.add(OUTLINE_FLASH);
 				setTimeout(() => el.classList.remove(OUTLINE_FLASH), 1600);
+			}
+
+			// ---- ③ 滚动高亮（Scroll Spy）：Intersection Observer ----
+			function ensureSpy(root) {
+				if (spyObserver && spyRoot === root) {
+					// 行数变化时重新 observe 新行
+					spyObserver.disconnect();
+				} else {
+					if (spyObserver) spyObserver.disconnect();
+					spyRoot = root;
+					spyObserver = new IntersectionObserver((entries) => {
+						const hit = entries.filter((e) => e.isIntersecting);
+						if (hit.length) {
+							// 取最后一个（最靠近阅读区顶部的）
+							const last = hit[hit.length - 1];
+							const idx = last.target.dataset.msgIdx;
+							if (idx !== undefined) setActive(Number(idx));
+						}
+					}, { root: findScrollContainer(root) || null, rootMargin: "0px 0px -80% 0px" });
+				}
+				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
+				rows.forEach((el, i) => { el.dataset.msgIdx = String(i); spyObserver.observe(el); });
+			}
+
+			function setActive(idx) {
+				if (idx === activeIdx) return;
+				activeIdx = idx;
+				applyActive();
+			}
+			function applyActive() {
+				rowEls.forEach((r, i) => {
+					const on = i === activeIdx;
+					r.row.style.background = on ? "var(--dsw-static-deepseek-50)" : "transparent";
+					r.row.style.borderLeft = on ? "3px solid var(--dsw-alias-brand-primary)" : "3px solid transparent";
+					r.num.style.color = on ? "var(--dsw-static-deepseek-500)" : "var(--dsw-alias-label-tertiary)";
+					r.txt.style.color = on ? "var(--dsw-static-deepseek-600)" : "var(--dsw-alias-label-secondary)";
+					r.row.style.fontWeight = on ? "500" : "400";
+				});
 			}
 
 			// ---- hover 展开 / 移出收起 ----
@@ -1084,7 +1138,7 @@ window.__ModuleLoader__.load({
 			rail.addEventListener("mouseleave", hidePanel);
 			panel.addEventListener("mouseleave", hidePanel);
 
-			// ---- 轮询扫描（对话区 DOM 变化即更新；新消息 1s 内出现） ----
+			// ---- 轮询扫描 ----
 			scan();
 			setInterval(scan, 800);
 
