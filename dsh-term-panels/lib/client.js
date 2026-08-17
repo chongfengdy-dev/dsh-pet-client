@@ -966,7 +966,7 @@ window.__ModuleLoader__.load({
 				background: "transparent", border: "1px solid transparent",
 				cursor: "pointer",
 				transition: "background .15s ease, border-color .15s ease",
-				maxHeight: "70vh", overflowY: "auto",
+				maxHeight: "300px", overflowY: "auto",
 				fontSize: "14px",
 				visibility: "hidden", // 定位到对话区左内缘前不显示
 			});
