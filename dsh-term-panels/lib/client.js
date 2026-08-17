@@ -900,24 +900,28 @@ window.__ModuleLoader__.load({
 		const OUTLINE_PANEL_ID = "dsh-msg-outline-panel";
 		const OUTLINE_FLASH = "dsh-msg-outline-flash";
 
-						function buildMessageOutline(ctx) {
-			// 2026-08-17 v3：完整三段式（照 DeepSeek 网页版给主整理的蓝图实现）——
-			// ① 解析：扫描对话区 [data-chat-flow-kind="user"] 行（我的消息，dsh 渲染契约）
-			//    生成大纲（行号+首行文本，超长截断…）；
-			// ② 点击：平滑滚动定位到对应消息行 + 黄色高亮闪烁；
-			// ③ 滚动高亮（Scroll Spy）：Intersection Observer（rootMargin -80%）
-			//    监测消息行进入阅读区 → 大纲对应行自动高亮（浅蓝底+蓝字+左边框）。
-			// 位置：对话区左缘（左侧侧边栏右面），一列细横杠无感缝合，hover 展开面板。
+				function buildMessageOutline(ctx) {
+			// 2026-08-17 v4（主验收定稿方向）：
+			// - 位置：对话区左内缘（不在左侧边栏里——之前放屏幕最左被侧边栏盖住）；
+			// - 数据：session.history 事件流（user/message 带 time 毫秒）→ 只显示今天的消息，
+			//   每条记录全局序号（定位用，因为对话区 DOM 含历史全部 user 行）；
+			// - 横线间距加大；一条横线对应一条消息（hover 横线联动面板行高亮）；
+			// - 滚动高亮（Scroll Spy）：IntersectionObserver(rootMargin -80%) 监听
+			//   对话区 user 行 → 大纲自动高亮当前阅读位置（浅蓝底+蓝字+左边框）；
+			// - 点击：平滑滚动定位 + 黄色闪烁。
 			if (document.getElementById(OUTLINE_RAIL_ID)) return; // 已注入
 
-			// ---- 左缘横杠条 ----
+			const connection = ctx.connection;
+			const sessions = ctx.sessions || (ctx.get ? ctx.get("sessions") : undefined);
+
+			// ---- 左缘横杠条（贴对话区左内缘） ----
 			const rail = document.createElement("div");
 			rail.id = OUTLINE_RAIL_ID;
 			Object.assign(rail.style, {
 				position: "fixed", left: "0", top: "50%",
 				transform: "translateY(-50%)", zIndex: "99989",
 				display: "flex", flexDirection: "column", alignItems: "center",
-				gap: "5px", padding: "8px 6px",
+				gap: "10px", padding: "8px 6px",
 				borderRadius: "0 10px 10px 0",
 				cursor: "pointer",
 				background: "transparent",
@@ -928,7 +932,7 @@ window.__ModuleLoader__.load({
 			const panel = document.createElement("div");
 			panel.id = OUTLINE_PANEL_ID;
 			Object.assign(panel.style, {
-				position: "fixed", left: "24px", top: "50%",
+				position: "fixed", left: "34px", top: "50%",
 				transform: "translateY(-50%)", zIndex: "99990",
 				width: "300px", maxHeight: "72vh",
 				display: "none", flexDirection: "column",
@@ -949,7 +953,7 @@ window.__ModuleLoader__.load({
 			});
 			const pTitle = document.createElement("span");
 			pTitle.style.cssText = "font-weight:600;font-size:12px";
-			pTitle.textContent = "我的消息";
+			pTitle.textContent = "我的消息 · 今天";
 			const pCount = document.createElement("span");
 			pCount.style.cssText = "font-size:11px;color:var(--dsw-alias-label-tertiary)";
 			pHead.appendChild(pTitle);
@@ -960,13 +964,152 @@ window.__ModuleLoader__.load({
 			panel.appendChild(pList);
 
 			// ---- 状态 ----
-			let userMsgs = [];        // string[]（我的消息首行文本）
-			let rowEls = [];          // {row, num, txt}（面板行引用，active 更新不重建）
-			let activeIdx = -1;       // 当前阅读位置的消息下标（-1=无）
-			let lastRows = -1;
+			let todayMsgs = [];       // [{text, globalIdx}] 今天的我的消息（globalIdx=在全部 user 消息中的序号）
+			let rowEls = [];          // {row, num, txt, globalIdx}
+			let activeIdx = -1;       // todayMsgs 下标
+			let sessionId = null;
+			let binding = null;
 			let spyObserver = null;
 			let spyRoot = null;
+			let lastUserRows = -1;
 
+			function todayStartMs() {
+				const d = new Date();
+				d.setHours(0, 0, 0, 0);
+				return d.getTime();
+			}
+
+			function currentSessionId() {
+				const snap = sessions && sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
+				return snap && snap.current !== undefined ? snap.current : null;
+			}
+
+			// ---- 数据：history 事件流（user/message 带 time） ----
+			function loadToday() {
+				const sid = currentSessionId();
+				if (!sid) { todayMsgs = []; renderAll(); return; }
+				if (sid !== sessionId) {
+					sessionId = sid;
+					try { binding = sessions.binding(sid); } catch (e) { binding = null; }
+					if (binding && binding.session && binding.session.subscribe) {
+						try { binding.session.subscribe(() => loadToday()); } catch (e) {}
+					}
+				}
+				if (!connection || !connection.api || !connection.api.sessions || !connection.api.sessions.history) return;
+				connection.api.sessions.history({ sessionId: sid }).then((r) => {
+					const events = r && r.result && r.result.ok ? ((r.result.value && r.result.value.events) || []) : [];
+					const all = [];
+					const start = todayStartMs();
+					for (const entry of events) {
+						const ev = entry && (entry.event || entry);
+						if (!ev || ev.type !== "user/message") continue;
+						const dd = ev.data || {};
+						let text = dd.text;
+						if (typeof text !== "string" || !text.trim()) {
+							const msg = dd.message || {};
+							text = typeof msg.text === "string" ? msg.text : "";
+						}
+						if (typeof text !== "string" || !text.trim()) continue;
+						const g = all.length;
+						all.push({ text: text.trim(), time: ev.time || 0, globalIdx: g });
+					}
+					todayMsgs = all.filter((m) => m.time >= start);
+					renderAll();
+					ensureSpy();
+				}).catch(() => {});
+			}
+
+			function renderAll() { renderRail(); renderPanel(); }
+
+			function renderRail() {
+				rail.textContent = "";
+				const n = Math.min(todayMsgs.length, 60);
+				for (let i = 0; i < n; i++) {
+					const bar = document.createElement("div");
+					Object.assign(bar.style, {
+						width: "16px", height: "2px", borderRadius: "1px",
+						background: "var(--dsw-alias-border-l3)",
+					});
+					bar.title = (i + 1) + ". " + (todayMsgs[i].text || "");
+					bar.addEventListener("mouseenter", () => highlightRow(i));
+					bar.addEventListener("click", () => scrollToMessage(i));
+					rail.appendChild(bar);
+				}
+				if (todayMsgs.length > 60) {
+					const more = document.createElement("div");
+					more.style.cssText = "font-size:9px;color:var(--dsw-alias-label-tertiary)";
+					more.textContent = "+" + (todayMsgs.length - 60);
+					rail.appendChild(more);
+				}
+			}
+
+			function renderPanel() {
+				pList.textContent = "";
+				rowEls = [];
+				pCount.textContent = todayMsgs.length ? String(todayMsgs.length) + " 条" : "";
+				if (!todayMsgs.length) {
+					const e = document.createElement("div");
+					e.style.cssText = "padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary)";
+					e.textContent = "今天还没有我的消息";
+					pList.appendChild(e);
+					return;
+				}
+				todayMsgs.forEach((m, idx) => {
+					const row = document.createElement("div");
+					Object.assign(row.style, {
+						display: "flex", gap: "8px", padding: "6px 10px",
+						borderRadius: "8px", cursor: "pointer", alignItems: "baseline",
+						borderLeft: "3px solid transparent",
+					});
+					row.onmouseenter = () => { if (activeIdx !== idx) row.style.background = "var(--dsw-alias-interactive-bg-hover)"; };
+					row.onmouseleave = () => { applyActive(); };
+					const num = document.createElement("span");
+					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;min-width:24px;text-align:right";
+					num.textContent = String(idx + 1);
+					const txt = document.createElement("span");
+					txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+					const short = m.text.length > 60 ? m.text.slice(0, 60) + "…" : m.text;
+					txt.textContent = short;
+					txt.title = m.text;
+					row.appendChild(num);
+					row.appendChild(txt);
+					row.addEventListener("click", () => scrollToMessage(idx));
+					pList.appendChild(row);
+					rowEls.push({ row, num, txt, globalIdx: m.globalIdx });
+				});
+				applyActive();
+			}
+
+			function highlightRow(idx) {
+				if (rowEls[idx]) {
+					rowEls[idx].row.scrollIntoView({ block: "nearest" });
+					rowEls[idx].row.style.background = "var(--dsw-alias-interactive-bg-hover)";
+				}
+			}
+
+			// ---- 点击：平滑滚动定位 + 闪烁 ----
+			function scrollToMessage(todayIdx) {
+				const m = todayMsgs[todayIdx];
+				if (!m) return;
+				const root = findChatRoot();
+				if (!root) return;
+				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
+				const el = rows[m.globalIdx];
+				if (!el) return;
+				const container = findScrollContainer(root);
+				if (container) {
+					const cr = container.getBoundingClientRect();
+					const tr = el.getBoundingClientRect();
+					container.scrollTo({ top: container.scrollTop + tr.top - cr.top - 12, behavior: "smooth" });
+				} else {
+					el.scrollIntoView({ behavior: "smooth", block: "start" });
+				}
+				setActive(todayIdx);
+				el.classList.add(OUTLINE_FLASH);
+				setTimeout(() => el.classList.remove(OUTLINE_FLASH), 1600);
+			}
+
+			// ---- 滚动高亮（Scroll Spy） ----
 			function findChatRoot() {
 				return document.querySelector('[data-slot="conversation"]');
 			}
@@ -980,132 +1123,28 @@ window.__ModuleLoader__.load({
 				}
 				return null;
 			}
-
-			// ---- ① 解析：扫描对话区我的消息行 ----
-			function scan() {
+			function ensureSpy() {
 				const root = findChatRoot();
 				if (!root) return;
-				try {
-					const r = root.getBoundingClientRect();
-					if (r.width > 0) rail.style.left = Math.max(0, r.left - 22) + "px";
-				} catch (e) {}
-				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
-				if (rows.length === lastRows) return;
-				lastRows = rows.length;
-				userMsgs = [];
-				for (const el of rows) {
-					const t = (el.textContent || "").trim().split("\n", 1)[0] || "";
-					if (t) userMsgs.push(t);
-				}
-				renderAll();
-				ensureSpy(root);
-			}
-
-			function renderAll() {
-				renderRail();
-				renderPanel();
-			}
-
-			function renderRail() {
-				rail.textContent = "";
-				const n = Math.min(userMsgs.length, 60);
-				for (let i = 0; i < n; i++) {
-					const bar = document.createElement("div");
-					Object.assign(bar.style, {
-						width: "14px", height: "2px", borderRadius: "1px",
-						background: "var(--dsw-alias-border-l3)",
-					});
-					bar.title = (i + 1) + ". " + (userMsgs[i] || "");
-					bar.addEventListener("click", () => scrollToMessage(i));
-					rail.appendChild(bar);
-				}
-				if (userMsgs.length > 60) {
-					const more = document.createElement("div");
-					more.style.cssText = "font-size:9px;color:var(--dsw-alias-label-tertiary)";
-					more.textContent = "+" + (userMsgs.length - 60);
-					rail.appendChild(more);
-				}
-			}
-
-			function renderPanel() {
-				pList.textContent = "";
-				rowEls = [];
-				pCount.textContent = userMsgs.length ? String(userMsgs.length) + " 条" : "";
-				if (!userMsgs.length) {
-					const e = document.createElement("div");
-					e.style.cssText = "padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary)";
-					e.textContent = "暂无我的消息";
-					pList.appendChild(e);
-					return;
-				}
-				userMsgs.forEach((text, idx) => {
-					const row = document.createElement("div");
-					Object.assign(row.style, {
-						display: "flex", gap: "8px", padding: "6px 10px",
-						borderRadius: "8px", cursor: "pointer", alignItems: "baseline",
-						borderLeft: "3px solid transparent",
-					});
-					row.onmouseenter = () => {
-						if (activeIdx !== idx) row.style.background = "var(--dsw-alias-interactive-bg-hover)";
-					};
-					row.onmouseleave = () => { applyActive(); };
-					const num = document.createElement("span");
-					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;min-width:24px;text-align:right";
-					num.textContent = String(idx + 1);
-					const txt = document.createElement("span");
-					txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-					const short = text.length > 60 ? text.slice(0, 60) + "…" : text;
-					txt.textContent = short;
-					txt.title = text;
-					row.appendChild(num);
-					row.appendChild(txt);
-					row.addEventListener("click", () => scrollToMessage(idx));
-					pList.appendChild(row);
-					rowEls.push({ row, num, txt });
-				});
-				applyActive();
-			}
-
-			// ---- ② 点击：平滑滚动定位 + 高亮闪烁 ----
-			function scrollToMessage(userIndex) {
-				const root = findChatRoot();
-				if (!root) return;
-				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
-				const el = rows[userIndex];
-				if (!el) return;
-				const container = findScrollContainer(root);
-				if (container) {
-					const cr = container.getBoundingClientRect();
-					const tr = el.getBoundingClientRect();
-					container.scrollTo({ top: container.scrollTop + tr.top - cr.top - 12, behavior: "smooth" });
-				} else {
-					el.scrollIntoView({ behavior: "smooth", block: "start" });
-				}
-				setActive(userIndex);
-				el.classList.add(OUTLINE_FLASH);
-				setTimeout(() => el.classList.remove(OUTLINE_FLASH), 1600);
-			}
-
-			// ---- ③ 滚动高亮（Scroll Spy）：Intersection Observer ----
-			function ensureSpy(root) {
-				if (spyObserver && spyRoot === root) {
-					// 行数变化时重新 observe 新行
-					spyObserver.disconnect();
-				} else {
+				if (!spyObserver || spyRoot !== root) {
 					if (spyObserver) spyObserver.disconnect();
 					spyRoot = root;
 					spyObserver = new IntersectionObserver((entries) => {
 						const hit = entries.filter((e) => e.isIntersecting);
-						if (hit.length) {
-							// 取最后一个（最靠近阅读区顶部的）
-							const last = hit[hit.length - 1];
-							const idx = last.target.dataset.msgIdx;
-							if (idx !== undefined) setActive(Number(idx));
+						if (!hit.length) return;
+						const last = hit[hit.length - 1];
+						const g = last.target.dataset.userSeq;
+						if (g === undefined) return;
+						// 全局 user 序号 → 今天的下标
+						for (let i = 0; i < todayMsgs.length; i++) {
+							if (todayMsgs[i].globalIdx === Number(g)) { setActive(i); break; }
 						}
 					}, { root: findScrollContainer(root) || null, rootMargin: "0px 0px -80% 0px" });
+				} else if (spyObserver) {
+					spyObserver.disconnect();
 				}
 				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
-				rows.forEach((el, i) => { el.dataset.msgIdx = String(i); spyObserver.observe(el); });
+				rows.forEach((el, i) => { el.dataset.userSeq = String(i); spyObserver.observe(el); });
 			}
 
 			function setActive(idx) {
@@ -1124,6 +1163,19 @@ window.__ModuleLoader__.load({
 				});
 			}
 
+			// ---- 位置跟随对话区左内缘 ----
+			function placeRail() {
+				const root = findChatRoot();
+				if (!root) return;
+				try {
+					const r = root.getBoundingClientRect();
+					if (r.width > 0) {
+						rail.style.left = (r.left + 4) + "px";
+						panel.style.left = (r.left + 28) + "px";
+					}
+				} catch (e) {}
+			}
+
 			// ---- hover 展开 / 移出收起 ----
 			let hideTimer = null;
 			rail.addEventListener("mouseenter", () => {
@@ -1138,9 +1190,13 @@ window.__ModuleLoader__.load({
 			rail.addEventListener("mouseleave", hidePanel);
 			panel.addEventListener("mouseleave", hidePanel);
 
-			// ---- 轮询扫描 ----
-			scan();
-			setInterval(scan, 800);
+			// ---- 刷新 ----
+			if (sessions && sessions.list && sessions.list.subscribe) {
+				try { sessions.list.subscribe(() => loadToday()); } catch (e) {}
+			}
+			loadToday();
+			setInterval(() => { loadToday(); placeRail(); }, 10000);
+			setInterval(placeRail, 2000);
 
 			// ---- 定位高亮动画样式 ----
 			if (!document.getElementById("dsh-msg-outline-style")) {
