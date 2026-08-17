@@ -1035,9 +1035,19 @@ window.__ModuleLoader__.load({
 			}
 
 			// 渲染全部行（展开时全部显示+滚动条；收起时只显示最近 10 条横杠，见 updateExpanded）
+			// 空状态（开会话还没收到新消息）：显示一条占位横杠，保证导航条可见可 hover，
+			// 占位条不算记录、点击不定位。
 			function renderRows() {
 				while (box.children.length) box.removeChild(box.lastChild);
 				rows = [];
+				if (!userMsgs.length) {
+					const ph = document.createElement("div");
+					ph.style.cssText = "flex:none;width:14px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3);opacity:.5;margin:0 4px";
+					ph.title = "我的消息（等待新消息…）";
+					box.appendChild(ph);
+					updateExpanded(expanded);
+					return;
+				}
 				userMsgs.forEach((text, i) => {
 					const r = buildRow(text, i);
 					box.appendChild(r.row);
