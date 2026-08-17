@@ -1004,14 +1004,23 @@ window.__ModuleLoader__.load({
 						const ev = entry && (entry.event || entry);
 						if (!ev || ev.type !== "user/message") continue;
 						const dd = ev.data || {};
-						let text = dd.text;
-						if (typeof text !== "string" || !text.trim()) {
-							const msg = dd.message || {};
-							text = typeof msg.text === "string" ? msg.text : "";
+						// 文本在 data.content（blocks 数组，与 snapshot node.content 同构）：
+						// [{type:"text",text:"..."}...]；兼容 data.text 直给形式
+						let text = "";
+						const content = dd.content || (dd.message && dd.message.content) || [];
+						if (Array.isArray(content)) {
+							for (const b of content) {
+								if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
+									text += b.text + "\n";
+								}
+							}
+						} else if (typeof dd.text === "string") {
+							text = dd.text;
 						}
-						if (typeof text !== "string" || !text.trim()) continue;
+						text = text.trim();
+						if (!text) continue;
 						const g = all.length;
-						all.push({ text: text.trim(), time: ev.time || 0, globalIdx: g });
+						all.push({ text, time: ev.time || 0, globalIdx: g });
 					}
 					todayMsgs = all.filter((m) => m.time >= start);
 					renderAll();
