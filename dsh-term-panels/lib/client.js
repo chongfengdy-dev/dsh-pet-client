@@ -940,14 +940,14 @@ window.__ModuleLoader__.load({
 		}
 
 				// ========== 左缘消息大纲条（当前会话我的消息，hover 展开） ==========
-		// 2026-08-17 主定稿（轻量重做，v1 基底）：一列细横杠（每条=我的一条消息），
-		// 位置：对话区滚动容器左内缘+4；最多显示 10 条横杠（最近 10 条，最新在下），
-		// 多于 10 条时 hover 展开的面板显示全部 + 滚动条上下查找；
-		// 横杠颜色：默认灰、鼠标划过变黑、点击变蓝并滚动定位；
-		// 面板字体 14px；数据源 sessions.binding(id).session 快照（订阅驱动，不轮询不重建）；
+		// 2026-08-17 主定稿（单元素设计，v1 基底）：横杠即面板——平时一列细横杠
+		// （每条=我的一条消息），hover 同一元素展开为完整大纲（横杠+行号+文本同一行，
+		// 天然垂直对齐）；位置：对话区滚动容器左内缘+4；最多显示 10 条（最近 10 条，
+		// 最新在下），多于 10 条展开时 box 内滚动条上下查找；
+		// 颜色：默认灰、鼠标划过整行变黑（横杠+文字）、点击行→横杠+文字变蓝并瞬间定位；
+		// 字体 14px；数据源 sessions.binding(id).session 快照（订阅驱动，不轮询不重建）；
 		// DOM 定位：data-chat-flow-kind="user" 第 n 行 = 第 n 条我的消息（dsh 渲染契约）。
 		const OUTLINE_RAIL_ID = "dsh-msg-outline-rail";
-		const OUTLINE_PANEL_ID = "dsh-msg-outline-panel";
 		const OUTLINE_FLASH = "dsh-msg-outline-flash";
 
 		function buildMessageOutline(ctx) {
@@ -955,61 +955,29 @@ window.__ModuleLoader__.load({
 			if (!sessions) return;
 			if (document.getElementById(OUTLINE_RAIL_ID)) return; // 已注入
 
-			// ---- 左缘横杠条（对话区左内缘，无感缝合） ----
-			const rail = document.createElement("div");
-			rail.id = OUTLINE_RAIL_ID;
-			Object.assign(rail.style, {
+			// ---- 单元素：横杠列 = 大纲面板（hover 同一元素展开） ----
+			const box = document.createElement("div");
+			box.id = OUTLINE_RAIL_ID;
+			Object.assign(box.style, {
 				position: "fixed", left: "0", top: "50%",
 				transform: "translateY(-50%)", zIndex: "99989",
-				display: "flex", flexDirection: "column", alignItems: "center",
-				gap: "5px", padding: "8px 6px",
-				borderRadius: "8px",
+				display: "flex", flexDirection: "column", gap: "5px",
+				padding: "6px", borderRadius: "10px",
+				background: "transparent", border: "1px solid transparent",
 				cursor: "pointer",
-				background: "transparent",
-			});
-
-			// ---- 展开面板（全部消息 + 滚动条；字体 14） ----
-			const panel = document.createElement("div");
-			panel.id = OUTLINE_PANEL_ID;
-			Object.assign(panel.style, {
-				position: "fixed", left: "24px", top: "50%",
-				transform: "translateY(-50%)", zIndex: "99990",
-				width: "320px", maxHeight: "72vh",
-				display: "none", flexDirection: "column",
-				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)",
-				border: "1px solid var(--dsw-alias-border-l2)",
-				borderRadius: "12px",
-				boxShadow: "0 8px 24px rgba(0,0,0,.25)",
-				backdropFilter: "blur(8px)",
-				color: "var(--dsw-alias-label-primary)",
-				fontFamily: 'system-ui, "Segoe UI", sans-serif',
+				transition: "background .15s ease, border-color .15s ease",
+				maxHeight: "70vh", overflowY: "auto",
 				fontSize: "14px",
+				visibility: "hidden", // 定位到对话区左内缘前不显示
 			});
-			const pHead = document.createElement("div");
-			Object.assign(pHead.style, {
-				display: "flex", justifyContent: "space-between", alignItems: "center",
-				padding: "9px 12px", borderBottom: "1px solid var(--dsw-alias-border-l2)",
-				flex: "none",
-			});
-			const pTitle = document.createElement("span");
-			pTitle.style.cssText = "font-weight:600;font-size:14px";
-			pTitle.textContent = "我的消息";
-			const pCount = document.createElement("span");
-			pCount.style.cssText = "font-size:12px;color:var(--dsw-alias-label-tertiary)";
-			pHead.appendChild(pTitle);
-			pHead.appendChild(pCount);
-			const pList = document.createElement("div");
-			Object.assign(pList.style, { overflowY: "auto", padding: "6px", flex: "1" });
-			panel.appendChild(pHead);
-			panel.appendChild(pList);
 
 			// ---- 状态 ----
 			let sessionId = null;
 			let binding = null;      // { session: { getSnapshot, subscribe } }
 			let userMsgs = [];       // string[]（我的消息首行文本）
-			let activeIdx = -1;      // 当前点击/选中的消息下标（-1=无，横杠/行变蓝）
-			let bars = [];           // 横杠元素引用（颜色状态更新用）
-			let placed = false;      // 已定位到对话区左内缘
+			let activeIdx = -1;      // 当前点击/选中的消息下标（-1=无，横杠+文字变蓝）
+			let rows = [];           // {row, bar, num, txt, idx} 行引用（颜色状态更新用）
+			let expanded = false;    // 是否展开（平时只显示横杠，hover 展开显示行号+文本）
 
 			function currentSessionId() {
 				const snap = sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
@@ -1020,7 +988,7 @@ window.__ModuleLoader__.load({
 				const sid = currentSessionId();
 				if (sid === sessionId && binding) { rebuild(); return; }
 				sessionId = sid;
-				if (sid === null) { binding = null; userMsgs = []; renderAll(); return; }
+				if (sid === null) { binding = null; userMsgs = []; renderRows(); return; }
 				try { binding = sessions.binding(sid); } catch (e) { binding = null; }
 				if (binding && binding.session && binding.session.subscribe) {
 					try { binding.session.subscribe(() => rebuild()); } catch (e) {}
@@ -1036,7 +1004,7 @@ window.__ModuleLoader__.load({
 						userMsgs = collectUserMessages(snap);
 					} catch (e) { userMsgs = []; }
 				}
-				renderAll();
+				renderRows();
 			}
 
 			function collectUserMessages(snap) {
@@ -1058,76 +1026,91 @@ window.__ModuleLoader__.load({
 				return out;
 			}
 
-			function renderAll() {
-				renderRail();
-				renderPanel();
-			}
-
-			// 横杠条：最多 10 条（最近 10 条，最新在下）；颜色状态机 灰/hover黑/点击蓝
-			function renderRail() {
-				rail.textContent = "";
-				bars = [];
+			// 渲染行：最多 10 条（最近 10 条，最新在下）；行 = 横杠+行号+文本（单元素）
+			function renderRows() {
+				while (box.children.length) box.removeChild(box.lastChild);
+				rows = [];
 				const start = Math.max(0, userMsgs.length - 10);
 				for (let i = start; i < userMsgs.length; i++) {
-					const bar = document.createElement("div");
-					Object.assign(bar.style, {
-						width: "14px", height: "2px", borderRadius: "1px",
-						background: "var(--dsw-alias-border-l3)",
-						transition: "background .12s ease",
-					});
-					bar.title = (i + 1) + ". " + (userMsgs[i] || "");
-					bar.addEventListener("mouseenter", () => { bar.style.background = "var(--dsw-alias-label-primary)"; });
-					bar.addEventListener("mouseleave", () => applyBarState(bar, i));
-					bar.addEventListener("click", () => scrollToMessage(i));
-					rail.appendChild(bar);
-					bars.push({ bar, idx: i });
+					const r = buildRow(userMsgs[i], i);
+					box.appendChild(r.row);
+					rows.push(r);
 				}
 				if (userMsgs.length > 10) {
 					const more = document.createElement("div");
-					more.style.cssText = "font-size:9px;color:var(--dsw-alias-label-tertiary)";
+					more.style.cssText = "font-size:10px;color:var(--dsw-alias-label-tertiary);padding:0 4px";
 					more.textContent = "+" + (userMsgs.length - 10);
-					rail.appendChild(more);
+					box.appendChild(more);
 				}
-			}
-			function applyBarState(bar, idx) {
-				bar.style.background = idx === activeIdx
-					? "var(--dsw-alias-state-business-primary)"   // 点击选中 = 蓝
-					: "var(--dsw-alias-border-l3)";               // 默认 = 灰
+				updateExpanded(expanded);
+				applyActive();
 			}
 
-			function renderPanel() {
-				pList.textContent = "";
-				pCount.textContent = userMsgs.length ? String(userMsgs.length) + " 条" : "";
-				if (!userMsgs.length) {
-					const e = document.createElement("div");
-					e.style.cssText = "padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary)";
-					e.textContent = "暂无我的消息";
-					pList.appendChild(e);
-					return;
-				}
-				userMsgs.forEach((text, idx) => {
-					const row = document.createElement("div");
-					Object.assign(row.style, {
-						display: "flex", gap: "8px", padding: "6px 10px",
-						borderRadius: "8px", cursor: "pointer", alignItems: "baseline",
-						transition: "background .12s ease",
-					});
-					row.onmouseenter = () => { row.style.background = "var(--dsw-alias-interactive-bg-hover)"; };
-					row.onmouseleave = () => { row.style.background = "transparent"; };
-					const num = document.createElement("span");
-					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:12px;color:var(--dsw-alias-label-tertiary);min-width:24px;text-align:right";
-					num.textContent = String(idx + 1);
-					const txt = document.createElement("span");
-					txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
-					const short = text.length > 60 ? text.slice(0, 60) + "…" : text;
-					txt.textContent = short;
-					txt.title = text;
-					row.appendChild(num);
-					row.appendChild(txt);
-					row.addEventListener("click", () => scrollToMessage(idx));
-					pList.appendChild(row);
+			// 构建一行：横杠 + 行号 + 文本（同一行垂直对齐；hover 整行变黑，点击变蓝）
+			function buildRow(text, idx) {
+				const row = document.createElement("div");
+				row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:20px;padding:0 4px;border-radius:6px;cursor:pointer;transition:background .12s ease";
+				const bar = document.createElement("div");
+				bar.style.cssText = "flex:none;width:14px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3);transition:background .12s ease";
+				const num = document.createElement("span");
+				num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:12px;min-width:22px;text-align:right;color:var(--dsw-alias-label-tertiary);display:none";
+				num.textContent = String(idx + 1);
+				const txt = document.createElement("span");
+				txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;display:none;color:var(--dsw-alias-label-secondary);font-size:14px";
+				const short = text.length > 60 ? text.slice(0, 60) + "…" : text;
+				txt.textContent = short;
+				txt.title = text;
+				row.appendChild(bar);
+				row.appendChild(num);
+				row.appendChild(txt);
+				// hover：整行变黑（横杠+文字）
+				row.addEventListener("mouseenter", () => {
+					row.style.background = "var(--dsw-alias-interactive-bg-hover)";
+					bar.style.background = "var(--dsw-alias-label-primary)";
+					num.style.color = "var(--dsw-alias-label-primary)";
+					txt.style.color = "var(--dsw-alias-label-primary)";
 				});
+				row.addEventListener("mouseleave", () => {
+					row.style.background = "transparent";
+					applyActive();
+				});
+				row.addEventListener("click", () => scrollToMessage(idx));
+				return { row, bar, num, txt, idx };
 			}
+
+			// 颜色状态：点击选中 = 蓝（横杠+文字），其余 = 灰
+			function applyActive() {
+				for (const r of rows) {
+					const on = r.idx === activeIdx;
+					r.bar.style.background = on
+						? "var(--dsw-alias-state-business-primary)"   // 点击选中 = 蓝
+						: "var(--dsw-alias-border-l3)";               // 默认 = 灰
+					r.num.style.color = on
+						? "var(--dsw-alias-state-business-primary)"
+						: "var(--dsw-alias-label-tertiary)";
+					r.txt.style.color = on
+						? "var(--dsw-alias-state-business-primary)"
+						: "var(--dsw-alias-label-secondary)";
+				}
+			}
+
+			// ---- hover 展开 / 收起（同一元素：横杠列 ↔ 完整大纲；只切样式不重建） ----
+			function updateExpanded(on) {
+				expanded = on;
+				box.style.background = on
+					? "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)"
+					: "transparent";
+				box.style.borderColor = on ? "var(--dsw-alias-border-l2)" : "transparent";
+				box.style.boxShadow = on ? "0 8px 24px rgba(0,0,0,.25)" : "none";
+				box.style.backdropFilter = on ? "blur(8px)" : "none";
+				box.style.width = on ? "320px" : "auto";
+				for (const r of rows) {
+					r.num.style.display = on ? "" : "none";
+					r.txt.style.display = on ? "" : "none";
+				}
+			}
+			box.addEventListener("mouseenter", () => updateExpanded(true));
+			box.addEventListener("mouseleave", () => updateExpanded(false));
 
 			// ---- 位置：对话区滚动容器左内缘+4（resize 时更新，不轮询） ----
 			function placeOutline() {
@@ -1137,9 +1120,8 @@ window.__ModuleLoader__.load({
 				try {
 					const r = container.getBoundingClientRect();
 					if (r.width > 0) {
-						rail.style.left = Math.max(0, r.left + 4) + "px";
-						panel.style.left = (r.left + 4 + (rail.offsetWidth || 30) + 8) + "px";
-						placed = true;
+						box.style.left = Math.max(0, r.left + 4) + "px";
+						box.style.visibility = "visible";
 					}
 				} catch (e) {}
 			}
@@ -1160,11 +1142,11 @@ window.__ModuleLoader__.load({
 			}
 			function scrollToMessage(userIndex) {
 				activeIdx = userIndex;
-				for (const b of bars) applyBarState(b.bar, b.idx);
+				applyActive();
 				const root = findChatRoot();
 				if (!root) return;
-				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
-				const el = rows[userIndex];
+				const els = root.querySelectorAll('[data-chat-flow-kind="user"]');
+				const el = els[userIndex];
 				if (!el) return;
 				const container = findScrollContainer(root);
 				if (container) {
@@ -1177,20 +1159,6 @@ window.__ModuleLoader__.load({
 				el.classList.add(OUTLINE_FLASH);
 				setTimeout(() => el.classList.remove(OUTLINE_FLASH), 1600);
 			}
-
-			// ---- hover 展开 / 移出收起 ----
-			let hideTimer = null;
-			rail.addEventListener("mouseenter", () => {
-				clearTimeout(hideTimer);
-				rebuild();
-				panel.style.display = "flex";
-			});
-			panel.addEventListener("mouseenter", () => { clearTimeout(hideTimer); });
-			const hidePanel = () => {
-				hideTimer = setTimeout(() => { panel.style.display = "none"; }, 180);
-			};
-			rail.addEventListener("mouseleave", hidePanel);
-			panel.addEventListener("mouseleave", hidePanel);
 
 			// ---- 数据刷新：会话切换订阅（无轮询，来一条加一条由订阅驱动） ----
 			if (sessions.list && sessions.list.subscribe) {
@@ -1209,8 +1177,7 @@ window.__ModuleLoader__.load({
 				document.head.appendChild(st);
 			}
 
-			document.body.appendChild(rail);
-			document.body.appendChild(panel);
+			document.body.appendChild(box);
 		}
 
 exports.apply = apply;
