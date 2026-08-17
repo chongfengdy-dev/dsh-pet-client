@@ -848,7 +848,7 @@ window.__ModuleLoader__.load({
 			Object.assign(hint.style, {
 				position: "fixed", zIndex: "99999",
 				padding: "6px 14px", borderRadius: "10px",
-				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 50%, transparent)",
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 75%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
 				boxShadow: "0 4px 16px rgba(0,0,0,.22)",
 				color: "var(--dsw-alias-label-primary)",
@@ -1350,9 +1350,9 @@ window.__ModuleLoader__.load({
 				row.appendChild(bar);
 				row.appendChild(num);
 				row.appendChild(txt);
-				// hover：整行变黑（横杠+文字）
+				// hover：整行变黑（横杠+文字）+ 更暗的行背景（主 2026-08-17 要求改暗）
 				row.addEventListener("mouseenter", () => {
-					row.style.background = "var(--dsw-alias-interactive-bg-hover)";
+					row.style.background = "var(--dsw-alias-interactive-bg-hover-accent)";
 					bar.style.background = "var(--dsw-alias-label-primary)";
 					num.style.color = "var(--dsw-alias-label-primary)";
 					txt.style.color = "var(--dsw-alias-label-primary)";
