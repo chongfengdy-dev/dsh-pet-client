@@ -140,6 +140,34 @@ app.post('/api/pet-state', (req, res) => {
   writePetStateFile();
   res.json(petState);
 });
+// ---------- 横杠大纲历史持久化（服务端文件，跨重启保留） ----------
+// 主 2026-08-17 定稿：横杠记录要"关机也能找回来"，走服务端文件（localStorage 在
+// WebView2 缓存目录下不可靠）。按会话 ID 存 [{text}] 列表；插件启动读、来一条写一条。
+const OUTLINE_HISTORY_FILE = path.join(__dirname, 'outline-history.json');
+app.get('/api/outline-history', (req, res) => {
+  const sid = req.query.sessionId || '';
+  if (!sid) return res.status(400).json({ error: 'sessionId required' });
+  try {
+    const data = JSON.parse(fs.readFileSync(OUTLINE_HISTORY_FILE, 'utf8'));
+    res.json({ list: Array.isArray(data[sid]) ? data[sid] : [] });
+  } catch (e) {
+    res.json({ list: [] });   // 首次/异常 → 空
+  }
+});
+app.post('/api/outline-history', (req, res) => {
+  try {
+    const sid = req.body.sessionId;
+    const list = req.body.list;
+    if (!sid || !Array.isArray(list)) return res.status(400).json({ error: 'sessionId and list array required' });
+    let data = {};
+    try { data = JSON.parse(fs.readFileSync(OUTLINE_HISTORY_FILE, 'utf8')); } catch (e) {}
+    data[sid] = list;
+    fs.writeFileSync(OUTLINE_HISTORY_FILE, JSON.stringify(data), 'utf8');
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 // 提问检测（权威源）：会话记录 approval/asked vs decided，
 // 有未决提问 → orange；否则 blue（黑/蓝由客户端本地按窗口状态决定）。
 // 前端事件通道（subscribeEnvelopes）是诊断用途收不到业务事件，改后端检测。
