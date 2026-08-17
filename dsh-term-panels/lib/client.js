@@ -843,18 +843,18 @@ window.__ModuleLoader__.load({
 				path.setAttribute("points", "");
 			}
 
-			// 动作提示：鼠标处显示"到顶部/到底部/刷新"，16px，1.5s 消失
+			// 动作提示：鼠标处显示"到顶部/到底部/刷新"，16px 细体，半透明+模糊，1.5s 消失
 			const hint = document.createElement("div");
 			Object.assign(hint.style, {
 				position: "fixed", zIndex: "99999",
 				padding: "6px 14px", borderRadius: "10px",
-				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 80%, transparent)",
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 35%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
 				boxShadow: "0 4px 16px rgba(0,0,0,.22)",
-				backdropFilter: "blur(4px)",
+				backdropFilter: "blur(8px)",
 				color: "var(--dsw-alias-label-primary)",
 				fontFamily: 'system-ui, "Segoe UI", sans-serif',
-				fontSize: "16px", fontWeight: "600",
+				fontSize: "16px", fontWeight: "400",
 				pointerEvents: "none", display: "none",
 				whiteSpace: "nowrap",
 				transform: "translate(-50%, -50%)",
