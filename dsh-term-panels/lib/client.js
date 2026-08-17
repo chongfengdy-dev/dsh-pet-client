@@ -806,41 +806,51 @@ window.__ModuleLoader__.load({
 			let active = false;        // 手势进行中（超过阈值后）
 			let moved = false;         // 是否已拖动（阻止右键菜单）
 
-			// 拖行轨迹：起点圆点 + 跟随线（拖动时可见）
-			const trail = document.createElement("div");
+			// 拖行轨迹：SVG 折线绘制鼠标实际行进路径（起点圆点 + 完整路径）
+			const NS = "http://www.w3.org/2000/svg";
+			const trailSvg = document.createElementNS(NS, "svg");
+			const path = document.createElementNS(NS, "polyline");
 			const dot = document.createElement("div");
-			Object.assign(trail.style, {
-				position: "fixed", left: "0", top: "0", zIndex: "99999",
-				height: "2px", borderRadius: "1px",
-				background: "var(--dsw-alias-state-business-primary)",
-				opacity: ".6", pointerEvents: "none", display: "none",
-				transformOrigin: "left center",
+			const BLUE = getComputedStyle(document.documentElement).getPropertyValue("--dsw-alias-state-business-primary").trim() || "#4d6bfe";
+			trailSvg.setAttribute("viewBox", "0 0 1 1");
+			Object.assign(trailSvg.style, {
+				position: "fixed", left: "0", top: "0", width: "100vw", height: "100vh",
+				zIndex: "99999", pointerEvents: "none", display: "none",
 			});
+			path.setAttribute("fill", "none");
+			path.setAttribute("stroke", BLUE);
+			path.setAttribute("stroke-width", "2");
+			path.setAttribute("stroke-linecap", "round");
+			path.setAttribute("stroke-linejoin", "round");
+			path.setAttribute("opacity", "0.7");
+			trailSvg.appendChild(path);
 			Object.assign(dot.style, {
 				position: "fixed", left: "0", top: "0", zIndex: "99999",
 				width: "8px", height: "8px", borderRadius: "50%",
-				background: "var(--dsw-alias-state-business-primary)",
-				opacity: ".6", pointerEvents: "none", display: "none",
+				background: BLUE,
+				opacity: ".7", pointerEvents: "none", display: "none",
 				transform: "translate(-50%, -50%)",
 			});
-			document.body.appendChild(trail);
+			document.body.appendChild(trailSvg);
 			document.body.appendChild(dot);
-			function showTrail(x1, y1, x2, y2) {
-				const dx = x2 - x1, dy = y2 - y1;
-				const len = Math.sqrt(dx * dx + dy * dy);
-				const angle = Math.atan2(dy, dx) * 180 / Math.PI;
-				trail.style.display = "block";
-				trail.style.left = x1 + "px";
-				trail.style.top = y1 + "px";
-				trail.style.width = Math.max(len, 2) + "px";
-				trail.style.transform = "rotate(" + angle + "deg)";
+			let pathPoints = [];   // [[x,y],...] 实际行进点
+			function showTrail(x, y) {
+				// 节流：与上一个点距离够大才记录（避免密集噪点）
+				const last = pathPoints[pathPoints.length - 1];
+				if (!last || Math.hypot(x - last[0], y - last[1]) >= 6) {
+					pathPoints.push([x, y]);
+					path.setAttribute("points", pathPoints.map((p) => p[0] + "," + p[1]).join(" "));
+				}
+				trailSvg.style.display = "block";
 				dot.style.display = "block";
-				dot.style.left = x1 + "px";
-				dot.style.top = y1 + "px";
+				dot.style.left = x + "px";
+				dot.style.top = y + "px";
 			}
 			function hideTrail() {
-				trail.style.display = "none";
+				trailSvg.style.display = "none";
 				dot.style.display = "none";
+				pathPoints = [];
+				path.setAttribute("points", "");
 			}
 
 			// 找到可滚动的最近容器（优先鼠标所在滚动区，兜底整个页面）
@@ -869,7 +879,7 @@ window.__ModuleLoader__.load({
 				totalDy += dy;
 				if (Math.abs(e.clientY - startY) >= MOVE_MENU || Math.abs(e.clientX - startX) >= MOVE_MENU) {
 					moved = true;
-					showTrail(startX, startY, e.clientX, e.clientY);
+					showTrail(e.clientX, e.clientY);
 				}
 				if (!active && Math.abs(totalDy) >= THRESHOLD) active = true;
 				if (!active) return;
