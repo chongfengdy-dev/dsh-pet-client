@@ -1161,8 +1161,8 @@ window.__ModuleLoader__.load({
 			}
 
 			// ---- hover 展开 / 收起（同一元素：横杠列 ↔ 完整大纲；只切样式不重建） ----
-			// 收起：只显示最近 10 条的横杠（其余整行隐藏）；展开：全部行 bar+num+txt，
-			// 超过 box 高度出滚动条（maxHeight 70vh + overflowY auto）。
+			// 收起：只显示横杠（行号/文字隐藏）；展开：bar+num+txt 全显示。
+			// 用 mouseover/mouseout 冒泡（子元素都触发，热区可靠），收起态 min-width 保证可 hover。
 			function updateExpanded(on) {
 				expanded = on;
 				box.style.background = on
@@ -1172,6 +1172,7 @@ window.__ModuleLoader__.load({
 				box.style.boxShadow = on ? "0 8px 24px rgba(0,0,0,.25)" : "none";
 				box.style.backdropFilter = on ? "blur(8px)" : "none";
 				box.style.width = on ? "320px" : "auto";
+				box.style.minWidth = on ? "" : "30px";   // 收起态保证可 hover 热区
 				for (const r of rows) {
 					const recent = userMsgs.length - r.idx <= 10;   // 最近 10 条
 					r.row.style.display = (on || recent) ? "flex" : "none";
@@ -1179,8 +1180,10 @@ window.__ModuleLoader__.load({
 					r.txt.style.display = on ? "" : "none";
 				}
 			}
-			box.addEventListener("mouseenter", () => updateExpanded(true));
-			box.addEventListener("mouseleave", () => updateExpanded(false));
+			box.addEventListener("mouseover", () => updateExpanded(true));
+			box.addEventListener("mouseout", (e) => {
+				if (!box.contains(e.relatedTarget)) updateExpanded(false);
+			});
 
 			// ---- 位置：对话区滚动容器左内缘+4（resize 时更新，不轮询） ----
 			function placeOutline() {
