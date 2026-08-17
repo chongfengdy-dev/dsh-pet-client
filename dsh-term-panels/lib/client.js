@@ -428,6 +428,11 @@ window.__ModuleLoader__.load({
 			setInterval(() => fetchUsage(hud, hudState), 10000);
 			refreshBalance(hud, hudState);
 			setInterval(() => refreshBalance(hud, hudState), 120000); // 余额 2 分钟刷新
+
+			// ---------- 左侧历史会话栏（DeepSeek 网页版样式） ----------
+			buildHistoryBar(ctx);
+			// sessions 服务可能晚于本插件注册（cordis 启动顺序），延迟重试一次
+			setTimeout(() => buildHistoryBar(ctx), 1500);
 		}
 
 		// ---------- 工具：悬浮按钮 ----------
@@ -742,7 +747,7 @@ window.__ModuleLoader__.load({
 			root.id = HUD_ID;
 			Object.assign(root.style, {
 				position: "fixed", top: "14px", right: "14px", zIndex: "99992",
-				minWidth: "250px", padding: "10px 12px",
+				minWidth: "190px", padding: "10px 12px",
 				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
 				borderRadius: "10px",
@@ -819,11 +824,11 @@ window.__ModuleLoader__.load({
 			const hit = state.inputHit !== undefined ? state.inputHit : state.cacheRead;
 			const hitRate = hitTotal > 0 ? Math.round(hit / hitTotal * 100) : 0;
 			const money = (n) => (n !== undefined && n !== null ? "¥" + Number(n).toFixed(2) : "—");
-			hud.grid.appendChild(row("输入（命中）", fmt(hit), money(state.inputHitCost)));
-			hud.grid.appendChild(row("输入（未命中）", fmt(hitTotal - hit), money(state.inputMissCost)));
+			hud.grid.appendChild(row("命中", fmt(hit), money(state.inputHitCost)));
+			hud.grid.appendChild(row("未命中", fmt(hitTotal - hit), money(state.inputMissCost)));
 			hud.grid.appendChild(row("命中率", hitRate + "%", "—"));
 			hud.grid.appendChild(row("输出", fmt(state.output), money(state.outputCost)));
-			hud.grid.appendChild(row("今日消耗", "—", state.cost !== null ? "¥" + state.cost.toFixed(2) : "—"));
+			hud.grid.appendChild(row("花费", "—", state.cost !== null ? "¥" + state.cost.toFixed(2) : "—"));
 			hud.grid.appendChild(row("余额", "—", state.balance !== null ? "¥" + state.balance : "…"));
 		}
 		function fmt(n) {
@@ -885,8 +890,324 @@ window.__ModuleLoader__.load({
 				.finally(() => renderHud(hud, state));
 		}
 
+		// ========== 左侧历史会话栏（DeepSeek 网页版样式） ==========
+		// 2026-08-17 主定稿：位置=左侧悬浮（工作区右侧/对话框左侧中间空间）；
+		// 交互参考 DeepSeek 网页版——hover 会话项显示该会话我发送的消息（一条一条），
+		// 当前会话蓝色、其余灰色、hover 灰变黑；按天分组（今天/昨天/更早），
+		// 昨天以前的折叠可点开；点击会话项切换会话（sessions.open）。
+		const HIST_DOCK_ID = "dsh-panels-hist-dock";
+		const HIST_PANEL_ID = "dsh-panels-hist-panel";
+		const HIST_HOVER_ID = "dsh-panels-hist-hover";
+
+		function buildHistoryBar(ctx) {
+			const connection = ctx.connection;
+			// sessions 服务：优先 ctx.sessions（inject 注入），兜底 ctx.get（dsh-client-runtime
+			// 注册的服务，cordis 标准读取；不依赖 boot manifest 的 inject 声明，避免改 package.json
+			// 后需重启 dsh web 才生效）
+			const sessions = ctx.sessions || (ctx.get ? ctx.get("sessions") : undefined);
+			if (!connection || !sessions) return;
+			if (document.getElementById(HIST_DOCK_ID)) return; // 已注入
+
+			// ---- 左侧 dock 按钮（☰） ----
+			const dock = document.createElement("button");
+			dock.id = HIST_DOCK_ID;
+			dock.textContent = "☰";
+			dock.title = "历史会话";
+			Object.assign(dock.style, {
+				position: "fixed", left: "10px", top: "50%",
+				transform: "translateY(-50%)", zIndex: "99990",
+				width: "44px", height: "44px", borderRadius: "12px",
+				border: "1px solid var(--dsw-alias-border-l2)",
+				cursor: "pointer",
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
+				color: "var(--dsw-alias-label-primary)",
+				fontSize: "18px",
+				display: "flex", alignItems: "center", justifyContent: "center",
+				backdropFilter: "blur(4px)",
+				boxShadow: "0 4px 16px rgba(0,0,0,.22)",
+			});
+
+			// ---- 左侧面板 ----
+			const panel = document.createElement("div");
+			panel.id = HIST_PANEL_ID;
+			Object.assign(panel.style, {
+				position: "fixed", left: "12px", top: "50%",
+				transform: "translateY(-50%)", zIndex: "99991",
+				width: "250px", maxHeight: "72vh",
+				display: "flex", flexDirection: "column",
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 92%, transparent)",
+				border: "1px solid var(--dsw-alias-border-l2)",
+				borderRadius: "12px",
+				boxShadow: "0 8px 24px rgba(0,0,0,.25)",
+				backdropFilter: "blur(8px)",
+				color: "var(--dsw-alias-label-primary)",
+				fontFamily: 'system-ui, "Segoe UI", sans-serif',
+				fontSize: "12px",
+			});
+			panel.hidden = true;
+
+			// 头部
+			const head = document.createElement("div");
+			Object.assign(head.style, {
+				display: "flex", justifyContent: "space-between", alignItems: "center",
+				padding: "10px 12px", borderBottom: "1px solid var(--dsw-alias-border-l2)",
+			});
+			const headTitle = document.createElement("span");
+			headTitle.style.cssText = "font-weight:600;font-size:12px";
+			headTitle.textContent = "历史会话";
+			const closeBtn = document.createElement("button");
+			closeBtn.textContent = "✕";
+			Object.assign(closeBtn.style, {
+				border: "none", background: "transparent", cursor: "pointer",
+				color: "var(--dsw-alias-label-secondary)", fontSize: "13px",
+				padding: "2px 6px", borderRadius: "6px",
+			});
+			closeBtn.onmouseover = () => { closeBtn.style.background = "var(--dsw-alias-interactive-bg-hover)"; };
+			closeBtn.onmouseout = () => { closeBtn.style.background = "transparent"; };
+			head.appendChild(headTitle);
+			head.appendChild(closeBtn);
+
+			// 列表容器
+			const listEl = document.createElement("div");
+			Object.assign(listEl.style, { overflowY: "auto", padding: "6px", flex: "1" });
+
+			panel.appendChild(head);
+			panel.appendChild(listEl);
+
+			// ---- hover 浮层（显示该会话我发送的消息） ----
+			const hover = document.createElement("div");
+			hover.id = HIST_HOVER_ID;
+			Object.assign(hover.style, {
+				position: "fixed", zIndex: "99995", display: "none",
+				minWidth: "220px", maxWidth: "320px", maxHeight: "60vh",
+				overflowY: "auto", padding: "10px 12px",
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)",
+				border: "1px solid var(--dsw-alias-border-l2)",
+				borderRadius: "10px",
+				boxShadow: "0 8px 24px rgba(0,0,0,.25)",
+				backdropFilter: "blur(8px)",
+				color: "var(--dsw-alias-label-secondary)",
+				fontSize: "12px", lineHeight: "1.5",
+				pointerEvents: "none",
+			});
+
+			// ---- 状态 ----
+			let sessionsCache = [];    // [{sessionId, title, updatedAt, running, blank}]
+			let currentId = null;
+			let hoverTimer = null;
+			let hoverShown = null;     // 当前浮层绑定的会话 id
+			const msgCache = new Map(); // sessionId -> string[]
+
+			function histLabel(ms) {
+				const now = new Date(), d = new Date(ms);
+				const today0 = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+				const day0 = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+				const diff = Math.round((today0 - day0) / 86400000);
+				if (diff === 0) return { g: "today", t: `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}` };
+				if (diff === 1) return { g: "yesterday", t: "昨天" };
+				return { g: "earlier", t: `${d.getMonth() + 1}月${d.getDate()}日` };
+			}
+
+			function itemTitle(it) {
+				const t = it.title || it.displayTitle;
+				if (t && String(t).trim()) return String(t).trim();
+				if (it.cwd) return String(it.cwd).split(/[\\/]/).pop();
+				return "新会话";
+			}
+
+			async function refreshList() {
+				try {
+					const { result } = await connection.api.sessions.list({});
+					if (!result || !result.ok) return;
+					sessionsCache = (result.value && result.value.items) || [];
+					const snap = sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
+					currentId = (snap && snap.current) || null;
+					renderList();
+				} catch (e) {}
+			}
+
+			function renderList() {
+				listEl.textContent = "";
+				if (!sessionsCache.length) {
+					const empty = document.createElement("div");
+					empty.style.cssText = "padding:20px;text-align:center;color:var(--dsw-alias-label-tertiary)";
+					empty.textContent = "暂无会话";
+					listEl.appendChild(empty);
+					return;
+				}
+				const groups = { today: [], yesterday: [], earlier: [] };
+				for (const it of sessionsCache) {
+					const { g } = histLabel(typeof it.updatedAt === "number" ? it.updatedAt : Date.now());
+					groups[g].push(it);
+				}
+				let earlierOpen = false;
+				const groupMeta = [
+					{ key: "today", label: "今天" },
+					{ key: "yesterday", label: "昨天" },
+					{ key: "earlier", label: "更早", collapsible: true },
+				];
+				for (const meta of groupMeta) {
+					const items = groups[meta.key];
+					if (!items.length) continue;
+					const gTitle = document.createElement("div");
+					Object.assign(gTitle.style, {
+						padding: "6px 8px 2px", fontSize: "11px",
+						color: "var(--dsw-alias-label-tertiary)",
+						cursor: "default", userSelect: "none",
+					});
+					gTitle.textContent = meta.label;
+					if (meta.collapsible) {
+						gTitle.textContent += earlierOpen ? " ▾" : " ▸";
+						gTitle.style.cursor = "pointer";
+						gTitle.onclick = (e) => {
+							e.stopPropagation();
+							earlierOpen = !earlierOpen;
+							renderList();
+						};
+					}
+					listEl.appendChild(gTitle);
+					if (meta.key === "earlier" && !earlierOpen) continue;
+					for (const it of items) listEl.appendChild(buildItem(it));
+				}
+			}
+
+			function buildItem(it) {
+				const el = document.createElement("div");
+				const isCurrent = it.sessionId === currentId;
+				Object.assign(el.style, {
+					display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px",
+					padding: "7px 9px", borderRadius: "8px", cursor: "pointer",
+					marginBottom: "2px",
+					color: isCurrent ? "var(--dsw-alias-label-primary-foreground)" : "var(--dsw-alias-label-secondary)",
+					background: isCurrent ? "var(--dsw-alias-brand-primary)" : "transparent",
+					fontWeight: isCurrent ? "600" : "400",
+				});
+				const name = document.createElement("span");
+				name.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
+				name.textContent = itemTitle(it);
+				name.title = name.textContent;
+				const tm = document.createElement("span");
+				tm.style.cssText = "flex:none;font-size:10px;opacity:.75";
+				const { t } = histLabel(typeof it.updatedAt === "number" ? it.updatedAt : Date.now());
+				tm.textContent = t;
+				el.appendChild(name);
+				el.appendChild(tm);
+
+				el.addEventListener("mouseenter", (e) => {
+					if (!isCurrent) el.style.background = "var(--dsw-alias-interactive-bg-hover)";
+					clearTimeout(hoverTimer);
+					hoverTimer = setTimeout(() => showHover(it.sessionId, el), 350);
+				});
+				el.addEventListener("mouseleave", () => {
+					if (!isCurrent) el.style.background = "transparent";
+					clearTimeout(hoverTimer);
+					hideHover();
+				});
+				el.addEventListener("click", () => {
+					if (it.sessionId === currentId) return;
+					try { sessions.open(it.sessionId); } catch (e) {}
+				});
+				return el;
+			}
+
+			async function loadMyMessages(sessionId) {
+				if (msgCache.has(sessionId)) return msgCache.get(sessionId);
+				try {
+					const { result } = await connection.api.sessions.history({ sessionId });
+					if (!result || !result.ok) return [];
+					const msgs = [];
+					for (const entry of (result.value && result.value.events) || []) {
+						const ev = entry && (entry.event || entry);
+						if (!ev || ev.type !== "user/message") continue;
+						const dd = ev.data || {};
+						let text = dd.text;
+						if (typeof text !== "string" || !text.trim()) {
+							const msg = dd.message || {};
+							text = typeof msg.text === "string" ? msg.text : "";
+						}
+						if (typeof text === "string" && text.trim()) msgs.push(text.trim());
+					}
+					msgCache.set(sessionId, msgs);
+					return msgs;
+				} catch (e) { return []; }
+			}
+
+			function positionHover(anchorEl) {
+				const r = anchorEl.getBoundingClientRect();
+				let left = r.right + 10;
+				let top = r.top;
+				if (left + 320 > window.innerWidth) left = r.left - 330;
+				if (top + 400 > window.innerHeight) top = Math.max(8, window.innerHeight - 420);
+				hover.style.left = left + "px";
+				hover.style.top = top + "px";
+			}
+
+			function hideHover() {
+				hoverShown = null;
+				hover.style.display = "none";
+			}
+
+			async function showHover(sessionId, anchorEl) {
+				hideHover();
+				hoverShown = sessionId;
+				hover.textContent = "加载中…";
+				hover.style.display = "block";
+				positionHover(anchorEl);
+				const msgs = await loadMyMessages(sessionId);
+				if (hoverShown !== sessionId) return; // 已移开
+				hover.textContent = "";
+				if (!msgs.length) {
+					hover.textContent = "（该会话暂无我的消息）";
+					return;
+				}
+				const cap = document.createElement("div");
+				cap.style.cssText = "font-size:11px;color:var(--dsw-alias-label-tertiary);margin-bottom:6px;font-weight:600";
+				cap.textContent = `我发送的消息（${msgs.length}）`;
+				hover.appendChild(cap);
+				for (const m of msgs) {
+					const line = document.createElement("div");
+					line.style.cssText = "margin-bottom:6px;padding-bottom:6px;border-bottom:1px solid var(--dsw-alias-border-l1);white-space:pre-wrap;word-break:break-word";
+					line.textContent = m.length > 200 ? m.slice(0, 200) + "…" : m;
+					hover.appendChild(line);
+				}
+			}
+
+			function toggle() {
+				if (panel.hidden) {
+					panel.hidden = false;
+					refreshList();
+					if (sessions.list && sessions.list.subscribe) {
+						try { sessions.list.subscribe(() => refreshList()); } catch (e) {}
+					}
+				} else {
+					panel.hidden = true;
+					hideHover();
+				}
+			}
+
+			dock.addEventListener("click", toggle);
+			closeBtn.addEventListener("click", () => { panel.hidden = true; hideHover(); });
+
+			// 点击外部收起
+			document.addEventListener("click", (e) => {
+				if (panel.hidden) return;
+				const t = e.target;
+				if (!t.closest) return;
+				if (t.closest("#" + HIST_PANEL_ID) || t.closest("#" + HIST_DOCK_ID)) return;
+				panel.hidden = true;
+				hideHover();
+			});
+
+			// 面板打开时轮询刷新
+			setInterval(() => { if (!panel.hidden) refreshList(); }, 30000);
+
+			document.body.appendChild(dock);
+			document.body.appendChild(panel);
+			document.body.appendChild(hover);
+		}
+
 		exports.apply = apply;
-		exports.inject = ["connection"];
+		exports.inject = ["connection", "sessions"];
 		return module.exports;
 	}
 });
