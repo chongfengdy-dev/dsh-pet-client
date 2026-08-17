@@ -812,7 +812,7 @@ window.__ModuleLoader__.load({
 			const path = document.createElementNS(NS, "polyline");
 			const dot = document.createElement("div");
 			const BLUE = getComputedStyle(document.documentElement).getPropertyValue("--dsw-alias-state-business-primary").trim() || "#4d6bfe";
-			trailSvg.setAttribute("viewBox", "0 0 1 1");
+			// 不用 viewBox：用户坐标 = 像素坐标（polyline 点直接用 clientX/clientY）
 			Object.assign(trailSvg.style, {
 				position: "fixed", left: "0", top: "0", width: "100vw", height: "100vh",
 				zIndex: "99999", pointerEvents: "none", display: "none",
