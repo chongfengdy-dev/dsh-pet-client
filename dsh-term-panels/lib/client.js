@@ -394,6 +394,9 @@ window.__ModuleLoader__.load({
 			const hud = buildHud();
 			document.body.appendChild(hud.root);
 
+			// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时屏幕中央提示） ----------
+			buildZoomHud();
+
 			// ---------- 点击外部收起面板（设置浮层算面板内部，不收起） ----------
 			document.addEventListener("click", (e) => {
 				const t = e.target;
@@ -741,6 +744,52 @@ window.__ModuleLoader__.load({
 			} catch (e) {}
 		}
 
+		// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时屏幕中央显示） ----------
+		// WebView2 浏览器缩放（Ctrl+滚轮 / Ctrl+± / Ctrl+0）会改变 window.devicePixelRatio
+		// （= 系统 DPI 缩放 × 页面缩放）。记录加载时 DPR 为基准，缩放后相除即得当前比例。
+		// 屏幕中央、半透明背景、字体 18px、只显示数字；1.5s 后自动隐藏。
+		function buildZoomHud() {
+			const el = document.createElement("div");
+			el.id = "dsh-zoom-hud";
+			Object.assign(el.style, {
+				position: "fixed", left: "50%", top: "50%",
+				transform: "translate(-50%, -50%)", zIndex: "99999",
+				padding: "10px 22px", borderRadius: "12px",
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
+				border: "1px solid var(--dsw-alias-border-l2)",
+				boxShadow: "0 4px 16px rgba(0,0,0,.22)",
+				backdropFilter: "blur(4px)",
+				color: "var(--dsw-alias-label-primary)",
+				fontFamily: 'system-ui, "Segoe UI", sans-serif',
+				fontSize: "18px", fontWeight: "600",
+				display: "none",
+				pointerEvents: "none",
+				userSelect: "none",
+			});
+			document.body.appendChild(el);
+			const baseDPR = window.devicePixelRatio || 1;
+			let hideTimer = null;
+			let readTimer = null;
+			function show() {
+				el.style.display = "";
+				el.textContent = "…";
+				clearTimeout(hideTimer);
+				clearTimeout(readTimer);
+				// 等 WebView2 缩放生效后再读 DPR（wheel 事件时缩放尚未应用）
+				readTimer = setTimeout(() => {
+					const dpr = window.devicePixelRatio || 1;
+					el.textContent = Math.round((dpr / baseDPR) * 100) + "%";
+				}, 120);
+				hideTimer = setTimeout(() => { el.style.display = "none"; }, 1500);
+			}
+			document.addEventListener("wheel", (e) => {
+				if (e.ctrlKey) show();
+			}, { passive: true });
+			document.addEventListener("keydown", (e) => {
+				if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "0")) show();
+			});
+		}
+
 		// ---------- Token HUD（常驻右上角） ----------
 		function buildHud() {
 			const root = document.createElement("div");
@@ -891,10 +940,11 @@ window.__ModuleLoader__.load({
 		}
 
 				// ========== 左缘消息大纲条（当前会话我的消息，hover 展开） ==========
-		// 2026-08-17 主定稿：左侧侧边栏右面、主页面左边，一列细横杠（每条=我的一条消息），
-		// 与页面无感缝合（透明底、低对比细线）；鼠标移上去横杠展开成一行行大纲
-		// （行号+消息文本，超长截断+…），点击定位对话中那条消息并高亮。
-		// 数据源：sessions.binding(id).session 快照（与 dsh-outline 同机制，实时流式）；
+		// 2026-08-17 主定稿（轻量重做，v1 基底）：一列细横杠（每条=我的一条消息），
+		// 位置：对话区滚动容器左内缘+4；最多显示 10 条横杠（最近 10 条，最新在下），
+		// 多于 10 条时 hover 展开的面板显示全部 + 滚动条上下查找；
+		// 横杠颜色：默认灰、鼠标划过变黑、点击变蓝并滚动定位；
+		// 面板字体 14px；数据源 sessions.binding(id).session 快照（订阅驱动，不轮询不重建）；
 		// DOM 定位：data-chat-flow-kind="user" 第 n 行 = 第 n 条我的消息（dsh 渲染契约）。
 		const OUTLINE_RAIL_ID = "dsh-msg-outline-rail";
 		const OUTLINE_PANEL_ID = "dsh-msg-outline-panel";
@@ -905,7 +955,7 @@ window.__ModuleLoader__.load({
 			if (!sessions) return;
 			if (document.getElementById(OUTLINE_RAIL_ID)) return; // 已注入
 
-			// ---- 左缘横杠条（无感缝合） ----
+			// ---- 左缘横杠条（对话区左内缘，无感缝合） ----
 			const rail = document.createElement("div");
 			rail.id = OUTLINE_RAIL_ID;
 			Object.assign(rail.style, {
@@ -913,18 +963,18 @@ window.__ModuleLoader__.load({
 				transform: "translateY(-50%)", zIndex: "99989",
 				display: "flex", flexDirection: "column", alignItems: "center",
 				gap: "5px", padding: "8px 6px",
-				borderRadius: "0 10px 10px 0",
+				borderRadius: "8px",
 				cursor: "pointer",
 				background: "transparent",
 			});
 
-			// ---- 展开面板 ----
+			// ---- 展开面板（全部消息 + 滚动条；字体 14） ----
 			const panel = document.createElement("div");
 			panel.id = OUTLINE_PANEL_ID;
 			Object.assign(panel.style, {
 				position: "fixed", left: "24px", top: "50%",
 				transform: "translateY(-50%)", zIndex: "99990",
-				width: "290px", maxHeight: "72vh",
+				width: "320px", maxHeight: "72vh",
 				display: "none", flexDirection: "column",
 				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
@@ -933,7 +983,7 @@ window.__ModuleLoader__.load({
 				backdropFilter: "blur(8px)",
 				color: "var(--dsw-alias-label-primary)",
 				fontFamily: 'system-ui, "Segoe UI", sans-serif',
-				fontSize: "12px",
+				fontSize: "14px",
 			});
 			const pHead = document.createElement("div");
 			Object.assign(pHead.style, {
@@ -942,10 +992,10 @@ window.__ModuleLoader__.load({
 				flex: "none",
 			});
 			const pTitle = document.createElement("span");
-			pTitle.style.cssText = "font-weight:600;font-size:12px";
+			pTitle.style.cssText = "font-weight:600;font-size:14px";
 			pTitle.textContent = "我的消息";
 			const pCount = document.createElement("span");
-			pCount.style.cssText = "font-size:11px;color:var(--dsw-alias-label-tertiary)";
+			pCount.style.cssText = "font-size:12px;color:var(--dsw-alias-label-tertiary)";
 			pHead.appendChild(pTitle);
 			pHead.appendChild(pCount);
 			const pList = document.createElement("div");
@@ -957,6 +1007,9 @@ window.__ModuleLoader__.load({
 			let sessionId = null;
 			let binding = null;      // { session: { getSnapshot, subscribe } }
 			let userMsgs = [];       // string[]（我的消息首行文本）
+			let activeIdx = -1;      // 当前点击/选中的消息下标（-1=无，横杠/行变蓝）
+			let bars = [];           // 横杠元素引用（颜色状态更新用）
+			let placed = false;      // 已定位到对话区左内缘
 
 			function currentSessionId() {
 				const snap = sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
@@ -1010,25 +1063,36 @@ window.__ModuleLoader__.load({
 				renderPanel();
 			}
 
+			// 横杠条：最多 10 条（最近 10 条，最新在下）；颜色状态机 灰/hover黑/点击蓝
 			function renderRail() {
 				rail.textContent = "";
-				const n = Math.min(userMsgs.length, 60);
-				for (let i = 0; i < n; i++) {
+				bars = [];
+				const start = Math.max(0, userMsgs.length - 10);
+				for (let i = start; i < userMsgs.length; i++) {
 					const bar = document.createElement("div");
 					Object.assign(bar.style, {
 						width: "14px", height: "2px", borderRadius: "1px",
 						background: "var(--dsw-alias-border-l3)",
+						transition: "background .12s ease",
 					});
 					bar.title = (i + 1) + ". " + (userMsgs[i] || "");
+					bar.addEventListener("mouseenter", () => { bar.style.background = "var(--dsw-alias-label-primary)"; });
+					bar.addEventListener("mouseleave", () => applyBarState(bar, i));
 					bar.addEventListener("click", () => scrollToMessage(i));
 					rail.appendChild(bar);
+					bars.push({ bar, idx: i });
 				}
-				if (userMsgs.length > 60) {
+				if (userMsgs.length > 10) {
 					const more = document.createElement("div");
 					more.style.cssText = "font-size:9px;color:var(--dsw-alias-label-tertiary)";
-					more.textContent = "+" + (userMsgs.length - 60);
+					more.textContent = "+" + (userMsgs.length - 10);
 					rail.appendChild(more);
 				}
+			}
+			function applyBarState(bar, idx) {
+				bar.style.background = idx === activeIdx
+					? "var(--dsw-alias-state-business-primary)"   // 点击选中 = 蓝
+					: "var(--dsw-alias-border-l3)";               // 默认 = 灰
 			}
 
 			function renderPanel() {
@@ -1046,11 +1110,12 @@ window.__ModuleLoader__.load({
 					Object.assign(row.style, {
 						display: "flex", gap: "8px", padding: "6px 10px",
 						borderRadius: "8px", cursor: "pointer", alignItems: "baseline",
+						transition: "background .12s ease",
 					});
 					row.onmouseenter = () => { row.style.background = "var(--dsw-alias-interactive-bg-hover)"; };
 					row.onmouseleave = () => { row.style.background = "transparent"; };
 					const num = document.createElement("span");
-					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:10px;color:var(--dsw-alias-label-tertiary);min-width:24px;text-align:right";
+					num.style.cssText = "flex:none;font-family:Consolas,monospace;font-size:12px;color:var(--dsw-alias-label-tertiary);min-width:24px;text-align:right";
 					num.textContent = String(idx + 1);
 					const txt = document.createElement("span");
 					txt.style.cssText = "flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap";
@@ -1062,6 +1127,21 @@ window.__ModuleLoader__.load({
 					row.addEventListener("click", () => scrollToMessage(idx));
 					pList.appendChild(row);
 				});
+			}
+
+			// ---- 位置：对话区滚动容器左内缘+4（resize 时更新，不轮询） ----
+			function placeOutline() {
+				const root = findChatRoot();
+				if (!root) return;
+				const container = findScrollContainer(root) || root;
+				try {
+					const r = container.getBoundingClientRect();
+					if (r.width > 0) {
+						rail.style.left = Math.max(0, r.left + 4) + "px";
+						panel.style.left = (r.left + 4 + (rail.offsetWidth || 30) + 8) + "px";
+						placed = true;
+					}
+				} catch (e) {}
 			}
 
 			// ---- DOM 定位（data-chat-flow-kind="user" 第 n 行 = 第 n 条我的消息） ----
@@ -1079,6 +1159,8 @@ window.__ModuleLoader__.load({
 				return null;
 			}
 			function scrollToMessage(userIndex) {
+				activeIdx = userIndex;
+				for (const b of bars) applyBarState(b.bar, b.idx);
 				const root = findChatRoot();
 				if (!root) return;
 				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
@@ -1110,12 +1192,13 @@ window.__ModuleLoader__.load({
 			rail.addEventListener("mouseleave", hidePanel);
 			panel.addEventListener("mouseleave", hidePanel);
 
-			// ---- 数据刷新：会话切换订阅 + 轮询兜底 ----
+			// ---- 数据刷新：会话切换订阅（无轮询，来一条加一条由订阅驱动） ----
 			if (sessions.list && sessions.list.subscribe) {
 				try { sessions.list.subscribe(() => rebind()); } catch (e) {}
 			}
 			rebind();
-			setInterval(rebind, 15000);
+			placeOutline();
+			window.addEventListener("resize", placeOutline);
 
 			// ---- 定位高亮动画样式 ----
 			if (!document.getElementById("dsh-msg-outline-style")) {
