@@ -1000,22 +1000,78 @@ window.__ModuleLoader__.load({
 				renderRows();
 			}
 
-			// 纯事件流订阅：开会话即开始记录，来一条记一条（不读快照、不读历史、不轮询）。
-			// 只处理 user/message 且 source.kind==="user" 的主提问，准确 append。
-			// 订阅前的旧消息（含插件加载前/compaction 压缩的）一概不显示。
-			function onSessionEvent(evt) {
-				const ev = evt && (evt.event || evt);
-				if (!ev || ev.type !== "user/message") return;
-				const srcKind = ev.data && ev.data.source && ev.data.source.kind;
-				if (srcKind !== undefined && srcKind !== "user") return;
-				const text = extractFirstLine(ev.data);
-				if (!text) return;
+			// 纯事件流订阅：开会话即开始记录，来一条记一条（不读快照基线、不拉 history、不轮询）。
+			// 回调兼容两种形态：(session, event) / (event)；同时用快照增量兜底——
+			// 以"已记录的最后一条"为锚点，快照里比锚点新的才 append（旧消息不显示）。
+			function onSessionEvent(evt, maybeEvent) {
+				let ev = null;
+				if (maybeEvent) ev = maybeEvent;
+				else if (evt && (evt.event || evt.type === "user/message")) ev = evt.event || evt;
+				// 事件形态：直接取 event 处理
+				if (ev) {
+					if (ev.type !== "user/message") return;
+					const srcKind = ev.data && ev.data.source && ev.data.source.kind;
+					if (srcKind !== undefined && srcKind !== "user") return;
+					const text = extractFirstLine(ev.data);
+					if (text) { appendRow(text); return; }
+				}
+				// 兜底：快照增量（回调可能是无参通知）
+				appendSnapshotDelta();
+			}
+
+			// 快照增量兜底：以已记录的最后一条为锚，只取快照里更新的（旧消息不显示）
+			function appendSnapshotDelta() {
+				if (!binding || !binding.session) return;
+				let snapList = [];
+				try {
+					snapList = collectUserMessages(binding.session.getSnapshot());
+				} catch (e) { return; }
+				if (!snapList.length) return;
+				let anchor = userMsgs.length ? userMsgs[userMsgs.length - 1] : null;
+				let start = anchor === null ? snapList.length : -1;
+				if (anchor !== null) {
+					// 找锚点在快照中的位置，其后为新增
+					for (let i = snapList.length - 1; i >= 0; i--) {
+						if (snapList[i] === anchor) { start = i + 1; break; }
+					}
+					if (start === -1) start = 0; // 锚点丢失（compaction）→ 从快照尾部追加不重复的
+				}
+				for (let i = start; i < snapList.length; i++) {
+					appendRow(snapList[i]);
+				}
+			}
+
+			function appendRow(text) {
 				userMsgs.push(text);
+				// 移除空状态占位
+				const ph = box.querySelector(":scope > div:last-child");
+				if (rows.length === 0 && ph && !ph.dataset.rowIdx && box.children.length === 1) {
+					box.removeChild(ph);
+				}
 				const r = buildRow(text, userMsgs.length - 1);
 				box.appendChild(r.row);
 				rows.push(r);
 				updateExpanded(expanded);
 				applyActive();
+			}
+
+			function collectUserMessages(snap) {
+				const out = [];
+				const nodes = snap && snap.nodes;
+				if (!Array.isArray(nodes)) return out;
+				for (const node of nodes) {
+					if (node.kind !== "user" && node.kind !== "steering") continue;
+					const blocks = node.content || node.blocks || [];
+					let text = "";
+					for (const b of blocks) {
+						if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
+							text += b.text + "\n";
+						}
+					}
+					const t = text.trim().split("\n", 1)[0] || "";
+					if (t) out.push(t);
+				}
+				return out;
 			}
 
 			function extractFirstLine(dd) {
