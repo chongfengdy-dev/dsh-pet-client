@@ -900,12 +900,13 @@ window.__ModuleLoader__.load({
 		const OUTLINE_PANEL_ID = "dsh-msg-outline-panel";
 		const OUTLINE_FLASH = "dsh-msg-outline-flash";
 
-		function buildMessageOutline(ctx) {
-			const sessions = ctx.sessions || (ctx.get ? ctx.get("sessions") : undefined);
-			if (!sessions) return;
+				function buildMessageOutline(ctx) {
+			// 2026-08-17 v2：DOM 驱动方案（不依赖 sessions 服务注入，避免环境差异导致
+			// 数据拿不到）——轮询对话区 [data-chat-flow-kind="user"] 节点（dsh 渲染契约，
+			// 即我发的消息行），文本取首行；位置跟随对话区左缘（左侧侧边栏右面）。
 			if (document.getElementById(OUTLINE_RAIL_ID)) return; // 已注入
 
-			// ---- 左缘横杠条（无感缝合） ----
+			// ---- 左缘横杠条 ----
 			const rail = document.createElement("div");
 			rail.id = OUTLINE_RAIL_ID;
 			Object.assign(rail.style, {
@@ -916,6 +917,7 @@ window.__ModuleLoader__.load({
 				borderRadius: "0 10px 10px 0",
 				cursor: "pointer",
 				background: "transparent",
+				transition: "left .2s ease",
 			});
 
 			// ---- 展开面板 ----
@@ -954,55 +956,41 @@ window.__ModuleLoader__.load({
 			panel.appendChild(pList);
 
 			// ---- 状态 ----
-			let sessionId = null;
-			let binding = null;      // { session: { getSnapshot, subscribe } }
-			let userMsgs = [];       // string[]（我的消息首行文本）
+			let userMsgs = [];        // string[]（我的消息首行文本）
+			let lastRows = 0;         // 上次扫描到的 user 行数（变化才重渲染）
 
-			function currentSessionId() {
-				const snap = sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
-				return snap && snap.current !== undefined ? snap.current : null;
+			function findChatRoot() {
+				return document.querySelector('[data-slot="conversation"]');
 			}
-
-			function rebind() {
-				const sid = currentSessionId();
-				if (sid === sessionId && binding) { rebuild(); return; }
-				sessionId = sid;
-				if (sid === null) { binding = null; userMsgs = []; renderAll(); return; }
-				try { binding = sessions.binding(sid); } catch (e) { binding = null; }
-				if (binding && binding.session && binding.session.subscribe) {
-					try { binding.session.subscribe(() => rebuild()); } catch (e) {}
+			function findScrollContainer(root) {
+				const first = root.querySelector("[data-chat-flow-kind]");
+				let cur = first ? first.parentElement : null;
+				while (cur && cur !== document.body) {
+					const s = getComputedStyle(cur);
+					if (cur.scrollHeight > cur.clientHeight && /(auto|scroll|overlay)/.test(s.overflowY)) return cur;
+					cur = cur.parentElement;
 				}
-				rebuild();
+				return null;
 			}
 
-			function rebuild() {
-				if (!binding || !binding.session) { userMsgs = []; }
-				else {
-					try {
-						const snap = binding.session.getSnapshot();
-						userMsgs = collectUserMessages(snap);
-					} catch (e) { userMsgs = []; }
+			function scan() {
+				const root = findChatRoot();
+				if (!root) { return; }
+				// rail 位置跟随对话区左缘（侧边栏右面）
+				try {
+					const r = root.getBoundingClientRect();
+					if (r.width > 0) rail.style.left = Math.max(0, r.left - 22) + "px";
+				} catch (e) {}
+				// 提取我的消息（data-chat-flow-kind="user" 行，首行文本）
+				const rows = root.querySelectorAll('[data-chat-flow-kind="user"]');
+				if (rows.length === lastRows && userMsgs.length === rows.length) return; // 无变化
+				lastRows = rows.length;
+				userMsgs = [];
+				for (const el of rows) {
+					const t = (el.textContent || "").trim().split("\n", 1)[0] || "";
+					if (t) userMsgs.push(t);
 				}
 				renderAll();
-			}
-
-			function collectUserMessages(snap) {
-				const out = [];
-				const nodes = snap && snap.nodes;
-				if (!Array.isArray(nodes)) return out;
-				for (const node of nodes) {
-					if (node.kind !== "user" && node.kind !== "steering") continue;
-					const blocks = node.content || node.blocks || [];
-					let text = "";
-					for (const b of blocks) {
-						if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
-							text += b.text + "\n";
-						}
-					}
-					const t = text.trim().split("\n", 1)[0] || "";
-					if (t) out.push(t);
-				}
-				return out;
 			}
 
 			function renderAll() {
@@ -1064,20 +1052,6 @@ window.__ModuleLoader__.load({
 				});
 			}
 
-			// ---- DOM 定位（data-chat-flow-kind="user" 第 n 行 = 第 n 条我的消息） ----
-			function findChatRoot() {
-				return document.querySelector('[data-slot="conversation"]');
-			}
-			function findScrollContainer(root) {
-				const first = root.querySelector("[data-chat-flow-kind]");
-				let cur = first ? first.parentElement : null;
-				while (cur && cur !== document.body) {
-					const s = getComputedStyle(cur);
-					if (cur.scrollHeight > cur.clientHeight && /(auto|scroll|overlay)/.test(s.overflowY)) return cur;
-					cur = cur.parentElement;
-				}
-				return null;
-			}
 			function scrollToMessage(userIndex) {
 				const root = findChatRoot();
 				if (!root) return;
@@ -1100,7 +1074,7 @@ window.__ModuleLoader__.load({
 			let hideTimer = null;
 			rail.addEventListener("mouseenter", () => {
 				clearTimeout(hideTimer);
-				rebuild();
+				renderPanel();
 				panel.style.display = "flex";
 			});
 			panel.addEventListener("mouseenter", () => { clearTimeout(hideTimer); });
@@ -1110,12 +1084,9 @@ window.__ModuleLoader__.load({
 			rail.addEventListener("mouseleave", hidePanel);
 			panel.addEventListener("mouseleave", hidePanel);
 
-			// ---- 数据刷新：会话切换订阅 + 轮询兜底 ----
-			if (sessions.list && sessions.list.subscribe) {
-				try { sessions.list.subscribe(() => rebind()); } catch (e) {}
-			}
-			rebind();
-			setInterval(rebind, 15000);
+			// ---- 轮询扫描（对话区 DOM 变化即更新；新消息 1s 内出现） ----
+			scan();
+			setInterval(scan, 800);
 
 			// ---- 定位高亮动画样式 ----
 			if (!document.getElementById("dsh-msg-outline-style")) {
