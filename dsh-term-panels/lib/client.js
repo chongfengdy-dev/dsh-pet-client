@@ -961,7 +961,7 @@ window.__ModuleLoader__.load({
 			Object.assign(box.style, {
 				position: "fixed", left: "0", top: "50%",
 				transform: "translateY(-50%)", zIndex: "99989",
-				display: "flex", flexDirection: "column", gap: "5px",
+				display: "flex", flexDirection: "column", gap: "0",
 				padding: "6px", borderRadius: "10px",
 				background: "transparent", border: "1px solid transparent",
 				cursor: "pointer",
@@ -1046,6 +1046,9 @@ window.__ModuleLoader__.load({
 					renderRows();
 				}
 				rebuildRowMap();
+				// 加载历史期间隐藏行号（序号整体前移会跳），加载完成（hasMore=false）再显示
+				numHiddenByLoad = !!snapHasMore;
+				updateExpanded(expanded);
 				// 还有更早历史 → 继续加载（loadOlder 分页；DOM 变化会再触发 sync）
 				if (snapHasMore) maybeLoadOlder();
 			}
@@ -1151,7 +1154,7 @@ window.__ModuleLoader__.load({
 				const text = m && m.text ? m.text : String(m || "");
 				const key = m && m.key;
 				const row = document.createElement("div");
-				row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:20px;padding:0 4px;border-radius:6px;cursor:pointer;transition:background .12s ease";
+				row.style.cssText = "display:flex;align-items:center;gap:8px;min-height:20px;padding:3px 4px;border-radius:6px;cursor:pointer;transition:background .12s ease";
 				if (key) row.dataset.msgKey = key;
 				const bar = document.createElement("div");
 				bar.style.cssText = "flex:none;width:14px;height:2px;border-radius:1px;background:var(--dsw-alias-border-l3);transition:background .12s ease";
@@ -1199,6 +1202,8 @@ window.__ModuleLoader__.load({
 			// ---- hover 展开 / 收起（同一元素：横杠列 ↔ 完整大纲；只切样式不重建） ----
 			// 收起：只显示横杠（行号/文字隐藏）；展开：bar+num+txt 全显示。
 			// 用 mouseover/mouseout 冒泡（子元素都触发，热区可靠），收起态 min-width 保证可 hover。
+			// num 显隐 = 展开 && 非"加载历史中"（加载时隐藏行号，完成再显示）
+			let numHiddenByLoad = false;
 			function updateExpanded(on) {
 				expanded = on;
 				box.style.background = on
@@ -1212,7 +1217,7 @@ window.__ModuleLoader__.load({
 				for (const r of rows) {
 					const recent = userMsgs.length - r.idx <= 10;   // 最近 10 条
 					r.row.style.display = (on || recent) ? "flex" : "none";
-					r.num.style.display = on ? "" : "none";
+					r.num.style.display = (on && !numHiddenByLoad) ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
 				}
 			}
