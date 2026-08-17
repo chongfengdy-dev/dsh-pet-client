@@ -1019,7 +1019,8 @@ window.__ModuleLoader__.load({
 					if (Array.isArray(order) && nodes && typeof nodes.get === "function") {
 						for (const key of order) {
 							const node = nodes.get(key);
-							if (!node || node.kind !== "user") continue;
+							if (!node) continue;
+							if (node.kind !== "user" && node.kind !== "steering") continue;
 							const t = nodeTextOf(node);
 							if (!t) continue;
 							list.push({ text: t, key });
@@ -1077,9 +1078,10 @@ window.__ModuleLoader__.load({
 				// 目标还没出现 → 继续触发"加载更早"（有更早按钮且非加载中）
 				if (pendingTarget) maybeLoadOlder();
 			}
-			// 从快照节点提取首行文本（与 collectUserMessages 同逻辑）
+			// 从快照节点提取首行文本（参考 dsh-chat-outline：文本在 node.data.content）
 			function nodeTextOf(node) {
-				const blocks = node.content || node.blocks || [];
+				if (!node) return "";
+				const blocks = (node.data && node.data.content) || node.content || node.blocks || [];
 				let text = "";
 				for (const b of blocks) {
 					if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
