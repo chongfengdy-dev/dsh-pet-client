@@ -843,6 +843,33 @@ window.__ModuleLoader__.load({
 				path.setAttribute("points", "");
 			}
 
+			// 动作提示：鼠标处显示"到顶部/到底部/刷新"，16px，1.5s 消失
+			const hint = document.createElement("div");
+			Object.assign(hint.style, {
+				position: "fixed", zIndex: "99999",
+				padding: "6px 14px", borderRadius: "10px",
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 80%, transparent)",
+				border: "1px solid var(--dsw-alias-border-l2)",
+				boxShadow: "0 4px 16px rgba(0,0,0,.22)",
+				backdropFilter: "blur(4px)",
+				color: "var(--dsw-alias-label-primary)",
+				fontFamily: 'system-ui, "Segoe UI", sans-serif',
+				fontSize: "16px", fontWeight: "600",
+				pointerEvents: "none", display: "none",
+				whiteSpace: "nowrap",
+				transform: "translate(-50%, -50%)",
+			});
+			document.body.appendChild(hint);
+			let hintTimer = null;
+			function showHint(x, y, text) {
+				hint.textContent = text;
+				hint.style.display = "block";
+				hint.style.left = x + "px";
+				hint.style.top = y + "px";
+				clearTimeout(hintTimer);
+				hintTimer = setTimeout(() => { hint.style.display = "none"; }, 1500);
+			}
+
 			// 找到可滚动的最近容器（优先鼠标所在滚动区，兜底整个页面）
 			function findScrollable(el) {
 				let cur = el;
@@ -922,13 +949,16 @@ window.__ModuleLoader__.load({
 					const sc = findScrollable(e.target);
 					if (isRefreshGesture()) {
 						// 严格先上后下（60° 锥内）→ 刷新页面
+						showHint(e.clientX, e.clientY, "刷新");
 						location.reload();
 					} else {
 						// 上/下拖需在正上/正下 60° 锥内；斜向/横向不动作
 						const dir = overallDirection();
 						if (dir === "up") {
+							showHint(e.clientX, e.clientY, "到顶部");
 							sc.scrollTop = 0;
 						} else if (dir === "down") {
+							showHint(e.clientX, e.clientY, "到底部");
 							sc.scrollTop = sc.scrollHeight;
 						}
 					}
