@@ -1,0 +1,13 @@
+[Unit]
+Description=DSH WeChat Channel (dsh-wechat plugin: iLink bot <-> agent, 收消息回复 + send 服务 3082)
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/dream
+ExecStart=/usr/bin/node /home/dream/.npm-global/bin/dsh --profile wechat
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
