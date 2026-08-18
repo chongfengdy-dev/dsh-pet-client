@@ -1403,11 +1403,24 @@ window.__ModuleLoader__.load({
 				box.style.width = on ? "320px" : "auto";
 				box.style.minWidth = on ? "" : "30px";   // 收起态保证可 hover 热区
 				box.style.overflowY = on ? "auto" : "hidden";   // 收起态无滚动条
-				// 收起态 = 10 条窗口：以激活消息为末位（无激活=最近 10 条），蓝条在对应位置（窗口末位）；
-				// 展开态 = 全部行
-				const winEnd = activeIdx >= 0 ? activeIdx : userMsgs.length - 1;
+				// 收起态 = 10 条窗口：以激活消息居中（顶部/底部钳制；无激活=最近10条），
+				// 蓝条在窗口内对应位置（applyActive 上色）；展开态 = 全部行
+				let winStart, winEnd;
+				if (activeIdx >= 0) {
+					winStart = activeIdx - 4;
+					winEnd = activeIdx + 5;
+					if (winStart < 0) { winEnd -= winStart; winStart = 0; }
+					if (winEnd > userMsgs.length - 1) {
+						winStart -= winEnd - (userMsgs.length - 1);
+						winEnd = userMsgs.length - 1;
+						winStart = Math.max(0, winStart);
+					}
+				} else {
+					winStart = Math.max(0, userMsgs.length - 10);
+					winEnd = userMsgs.length - 1;
+				}
 				for (const r of rows) {
-					const inWin = r.idx >= winEnd - 9 && r.idx <= winEnd;
+					const inWin = r.idx >= winStart && r.idx <= winEnd;
 					r.row.style.display = (on || inWin) ? "flex" : "none";
 					r.num.style.display = (on && !numHiddenByLoad) ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
