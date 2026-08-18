@@ -1403,13 +1403,19 @@ window.__ModuleLoader__.load({
 					r.num.style.display = (on && !numHiddenByLoad) ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
 				}
-				// 只在"收起→展开"的瞬间滚到底部（双 rAF 等布局完成）：
-				// 第一眼是最近 10 条（与收起位置一致），之后用户可上滚看更早——
-				// 展开期间鼠标移动/数据更新会反复触发 updateExpanded，不再重复滚动（否则瞬间拉回底部）
+				// 只在"收起→展开"的瞬间定位：跳到过/当前看过的消息（activeIdx）居中显示，
+				// 没跳转过则滚到底部（最近 10 条）；展开期间不再重复滚动（否则瞬间拉回底部）
 				if (on && !wasExpanded) {
 					requestAnimationFrame(() => {
 						requestAnimationFrame(() => {
-							box.scrollTop = box.scrollHeight;
+							const target = rows.find(r => r.idx === activeIdx);
+							if (target) {
+								const b = target.row.getBoundingClientRect();
+								const boxR = box.getBoundingClientRect();
+								box.scrollTop += (b.top - boxR.top) - (boxR.height / 2 - b.height / 2);
+							} else {
+								box.scrollTop = box.scrollHeight;
+							}
 						});
 					});
 				}
@@ -1487,6 +1493,41 @@ window.__ModuleLoader__.load({
 			placeOutline();
 			ensureRowObserver();
 			rebuildRowMap();
+			// ---- 视口跟随：对话区滚动时同步 activeIdx（事件驱动+节流，非轮询；
+			//      点跳转已在 scrollToMessage 里直接设 activeIdx） ----
+			function syncActiveFromView() {
+				const root = findChatRoot();
+				const container = root ? findScrollContainer(root) : null;
+				if (!container) return;
+				const cr = container.getBoundingClientRect();
+				if (cr.height <= 0) return;
+				// 取对话区左侧偏中的一点做命中检测（避开左缘横杠/留白）
+				const x = cr.left + Math.max(80, cr.width * 0.15);
+				const y = cr.top + 48;
+				const els = document.elementsFromPoint(x, y);
+				for (const el of els) {
+					const anc = el.closest ? el.closest('[data-chat-anchor-key]') : null;
+					const key = anc && anc.getAttribute('data-chat-anchor-key');
+					if (!key) continue;
+					const idx = userMsgs.findIndex(m => m.key === key);
+					if (idx >= 0 && idx !== activeIdx) {
+						activeIdx = idx;
+						applyActive();
+					}
+					return;
+				}
+			}
+			{
+				const root = findChatRoot();
+				const container = root ? findScrollContainer(root) : null;
+				if (container) {
+					let scrollTmr = null;
+					container.addEventListener("scroll", () => {
+						if (scrollTmr) return;
+						scrollTmr = setTimeout(() => { scrollTmr = null; syncActiveFromView(); }, 300);
+					}, { passive: true });
+				}
+			}
 			window.addEventListener("resize", placeOutline);
 
 			// ---- 定位高亮动画样式 ----
