@@ -1404,7 +1404,8 @@ window.__ModuleLoader__.load({
 				box.style.minWidth = on ? "" : "30px";   // 收起态保证可 hover 热区
 				for (const r of rows) {
 					const recent = userMsgs.length - r.idx <= 10;   // 最近 10 条
-					r.row.style.display = (on || recent) ? "flex" : "none";
+					const showCollapsed = recent || r.idx === activeIdx;  // 收起时额外保留激活消息的横杠（蓝条不消失）
+					r.row.style.display = (on || showCollapsed) ? "flex" : "none";
 					r.num.style.display = (on && !numHiddenByLoad) ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
 				}
@@ -1511,6 +1512,8 @@ window.__ModuleLoader__.load({
 					if (idx >= 0 && idx !== activeIdx) {
 						activeIdx = idx;
 						applyActive();
+						// 激活消息变化 → 刷新收起态可见性（蓝条跟随当前消息，含最近10条之外的）
+						updateExpanded(expanded);
 					}
 					return;
 				}
