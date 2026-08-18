@@ -1388,20 +1388,13 @@ window.__ModuleLoader__.load({
 			let numHiddenByLoad = false;
 			let savedScrollTop = null;   // 收起（鼠标离开）时的面板滚动位置，重新展开时原样还原
 			let collapsedWin = null;     // 收起时的可见行窗口（展开面板当前视口），收起态按它显示 10 条
-			// 捕获当前可见行窗口（展开面板视口内首尾行；最多 10 条，优先保底部可见）
+			// 捕获当前可见行窗口：以吸附到行边界的起点开始，恰好 10 条（与展开视口严格对应）
 			function captureVisibleWindow() {
 				if (!rows.length) return null;
-				const st = box.scrollTop;
-				const vb = st + box.clientHeight;
-				let start = 0, end = rows.length - 1;
-				for (let i = 0; i < rows.length; i++) {
-					if (rows[i].row.offsetTop + rows[i].row.offsetHeight > st) { start = i; break; }
-				}
-				for (let i = rows.length - 1; i >= 0; i--) {
-					if (rows[i].row.offsetTop < vb) { end = i; break; }
-				}
-				while (end - start + 1 > 10 && start < end) start++;
-				return { start, end };
+				const rowH = rows[0].row.offsetHeight || 26;
+				const start = Math.max(0, Math.min(rows.length - 1, Math.round(box.scrollTop / rowH)));
+				const end = Math.min(rows.length - 1, start + 9);
+				return { start, end, rowH };
 			}
 			function updateExpanded(on) {
 				const wasExpanded = expanded;
@@ -1431,12 +1424,14 @@ window.__ModuleLoader__.load({
 					r.num.style.display = (on && !numHiddenByLoad) ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
 				}
-				// 只在"收起→展开"的瞬间还原上次离开时的滚动位置（不居中、不跳底部）：
-				// 第一眼与离开时一致；展开期间不再重复滚动（否则瞬间拉回）
+				// 只在"收起→展开"的瞬间还原上次离开时的滚动位置（不居中、不跳底部），
+				// 并吸附到行边界（与 captureVisibleWindow 同一取整规则）——收起/展开的横杠严格对齐，不差半格
 				if (on && !wasExpanded) {
 					requestAnimationFrame(() => {
 						requestAnimationFrame(() => {
-							box.scrollTop = (savedScrollTop != null) ? savedScrollTop : box.scrollHeight;
+							const rowH = collapsedWin ? collapsedWin.rowH : (rows.length ? rows[0].row.offsetHeight : 26);
+							const target = savedScrollTop != null ? savedScrollTop : box.scrollHeight;
+							box.scrollTop = Math.round(target / rowH) * rowH;
 						});
 					});
 				}
