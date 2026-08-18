@@ -1387,6 +1387,7 @@ window.__ModuleLoader__.load({
 			// num 显隐 = 展开 && 非"加载历史中"（加载时隐藏行号，完成再显示）
 			let numHiddenByLoad = false;
 			function updateExpanded(on) {
+				const wasExpanded = expanded;
 				expanded = on;
 				box.style.background = on
 					? "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)"
@@ -1402,14 +1403,13 @@ window.__ModuleLoader__.load({
 					r.num.style.display = (on && !numHiddenByLoad) ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
 				}
-				// 展开时滚动到底部（双 rAF 等布局完成）：第一眼是最近 10 条（与收起位置一致），
-				// 滚动条可上滚看更早的消息
-				if (on) {
+				// 只在"收起→展开"的瞬间滚到底部（双 rAF 等布局完成）：
+				// 第一眼是最近 10 条（与收起位置一致），之后用户可上滚看更早——
+				// 展开期间鼠标移动/数据更新会反复触发 updateExpanded，不再重复滚动（否则瞬间拉回底部）
+				if (on && !wasExpanded) {
 					requestAnimationFrame(() => {
 						requestAnimationFrame(() => {
 							box.scrollTop = box.scrollHeight;
-							// 临时诊断：显示滚动信息（排查用，可删）
-							try { document.title = "outline scrollH=" + box.scrollHeight + " clientH=" + box.clientHeight + " rows=" + rows.length; } catch (e) {}
 						});
 					});
 				}

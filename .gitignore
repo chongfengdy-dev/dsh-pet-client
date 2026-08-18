@@ -13,6 +13,8 @@ nimcache/
 node_modules/
 *.zstd
 pet-state.json
+platform-token.json
 
 # 本地环境
 .dsh/
+term-state.json
