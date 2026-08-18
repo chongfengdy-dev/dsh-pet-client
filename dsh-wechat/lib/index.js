@@ -45,6 +45,21 @@ function saveSyncBuf(cfg, buf) {
 	try { fs.writeFileSync(syncFile(cfg), JSON.stringify({ get_updates_buf: buf })); } catch { /* 忽略 */ }
 }
 
+// 微信会话不进 GUI 列表：把会话 id 写进 storages/workspace.json 的 archivedSessionIds（幂等）
+function ensureSessionArchived(sessionId) {
+	try {
+		const p = path.join(dshHome(), "storages", "workspace.json");
+		const data = JSON.parse(fs.readFileSync(p, "utf8"));
+		const arr = (data.global && data.global.archivedSessionIds) || [];
+		if (!arr.includes(sessionId)) {
+			arr.push(sessionId);
+			if (!data.global) data.global = {};
+			data.global.archivedSessionIds = arr;
+			fs.writeFileSync(p, JSON.stringify(data, null, 2) + "\n");
+		}
+	} catch { /* 忽略 */ }
+}
+
 // 聚合一轮 turn 的最终 assistant 文本（参考 dsh-headless summarize）
 function summarizeReply(session, firstSeq) {
 	let text = "", reason;
@@ -69,7 +84,8 @@ async function askAgent(state, ctx, peerKey, userText) {
 	const sessions = ctx.get("sessions");
 	if (!agents || !defaultModel || !sessions) return "（微信通道未就绪）";
 	const selection = defaultModel.currentSelection();
-	const sessionId = SessionId("session-wechat-" + createHash("sha1").update(peerKey).digest("hex").slice(0, 12));
+	const rawSessionId = "session-wechat-" + createHash("sha1").update(peerKey).digest("hex").slice(0, 12);
+	const sessionId = SessionId(rawSessionId);
 	let entry = state.agents.get(peerKey);
 	if (!entry) {
 		const { agent } = await agents.create({
@@ -82,6 +98,7 @@ async function askAgent(state, ctx, peerKey, userText) {
 		});
 		entry = { agent };
 		state.agents.set(peerKey, entry);
+		ensureSessionArchived(rawSessionId);   // 微信会话隐藏出 GUI 列表
 	}
 	await entry.agent.whenIdle();
 	const firstSeq = entry.agent.session.seq;
