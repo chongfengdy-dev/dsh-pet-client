@@ -1,0 +1,11 @@
+# dsh-wechat 微信通道插件：注册常驻通道服务（cordis loader entry）。
+# 凭证在 profile 用户层的 cordis.patch.yml 按 id 覆盖 config（不入库）。
+
+- insert:
+    - id: wechat-channel
+      name: dsh-wechat
+      inject:
+        - agentDefaultModel
+        - agents
+        - sessions
+      config: {}
