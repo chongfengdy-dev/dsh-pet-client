@@ -1386,8 +1386,13 @@ window.__ModuleLoader__.load({
 			// 用 mouseover/mouseout 冒泡（子元素都触发，热区可靠），收起态 min-width 保证可 hover。
 			// num 显隐 = 展开 && 非"加载历史中"（加载时隐藏行号，完成再显示）
 			let numHiddenByLoad = false;
+			let savedScrollTop = null;   // 收起（鼠标离开）时的面板滚动位置，重新展开时原样还原
 			function updateExpanded(on) {
 				const wasExpanded = expanded;
+				if (expanded && !on) {
+					// 离开前记住位置：展开状态下的滚动位置，下次展开不移动
+					savedScrollTop = box.scrollTop;
+				}
 				expanded = on;
 				box.style.background = on
 					? "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 96%, transparent)"
@@ -1403,19 +1408,12 @@ window.__ModuleLoader__.load({
 					r.num.style.display = (on && !numHiddenByLoad) ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
 				}
-				// 只在"收起→展开"的瞬间定位：跳到过/当前看过的消息（activeIdx）居中显示，
-				// 没跳转过则滚到底部（最近 10 条）；展开期间不再重复滚动（否则瞬间拉回底部）
+				// 只在"收起→展开"的瞬间还原上次离开时的滚动位置（不居中、不跳底部）：
+				// 第一眼与离开时一致；展开期间不再重复滚动（否则瞬间拉回）
 				if (on && !wasExpanded) {
 					requestAnimationFrame(() => {
 						requestAnimationFrame(() => {
-							const target = rows.find(r => r.idx === activeIdx);
-							if (target) {
-								const b = target.row.getBoundingClientRect();
-								const boxR = box.getBoundingClientRect();
-								box.scrollTop += (b.top - boxR.top) - (boxR.height / 2 - b.height / 2);
-							} else {
-								box.scrollTop = box.scrollHeight;
-							}
+							box.scrollTop = (savedScrollTop != null) ? savedScrollTop : box.scrollHeight;
 						});
 					});
 				}
