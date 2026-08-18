@@ -1402,10 +1402,13 @@ window.__ModuleLoader__.load({
 				box.style.backdropFilter = on ? "blur(8px)" : "none";
 				box.style.width = on ? "320px" : "auto";
 				box.style.minWidth = on ? "" : "30px";   // 收起态保证可 hover 热区
+				box.style.overflowY = on ? "auto" : "hidden";   // 收起态无滚动条
+				// 收起态 = 10 条窗口：以激活消息为末位（无激活=最近 10 条），蓝条在对应位置（窗口末位）；
+				// 展开态 = 全部行
+				const winEnd = activeIdx >= 0 ? activeIdx : userMsgs.length - 1;
 				for (const r of rows) {
-					const recent = userMsgs.length - r.idx <= 10;   // 最近 10 条
-					const showCollapsed = recent || r.idx === activeIdx;  // 收起时额外保留激活消息的横杠（蓝条不消失）
-					r.row.style.display = (on || showCollapsed) ? "flex" : "none";
+					const inWin = r.idx >= winEnd - 9 && r.idx <= winEnd;
+					r.row.style.display = (on || inWin) ? "flex" : "none";
 					r.num.style.display = (on && !numHiddenByLoad) ? "" : "none";
 					r.txt.style.display = on ? "" : "none";
 				}
