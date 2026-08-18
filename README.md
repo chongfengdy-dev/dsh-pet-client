@@ -1,6 +1,6 @@
-# DSH Pet Client v2.0
+# DSH Pet Client v2.1.0
 
-DeepSeek Harness 的 Windows 桌面客户端——托盘 + 悬浮鲸鱼宠物 + **内嵌终端** + **Token HUD**。
+DeepSeek Harness 的 Windows 桌面客户端——托盘 + 悬浮鲸鱼宠物 + **内嵌终端** + **Token HUD** + **微信通道**。
 
 用 **Nim + webui + winim** 实现，双击运行即打开嵌入 WebView2 的 DSH 窗口。
 
@@ -20,6 +20,10 @@ DeepSeek Harness 的 Windows 桌面客户端——托盘 + 悬浮鲸鱼宠物 + 
 - 🖥️ **内嵌终端**：主窗口内直接打开 xterm 终端（非 iframe），直连 WSL 侧 3081 终端服务（真 PTY bash），支持自定义背景色 / 透明度 / 字号 / 字体，面板位置大小记忆
 - 📊 **Token HUD**：右上角常驻面板，实时显示当日 输入 / 输出 / 缓存命中率 / 余额（DeepSeek 官方接口）
 - 🐳 **三色悬浮鲸鱼宠物**：主窗口打开 = 黑色，最小化 = 蓝色，**需要你交互时（提问/审批）= 橙色心跳闪烁**（75bpm，托盘图标同步变色）
+- 📑 **消息大纲（左缘横杠）**：当前会话我的消息侧边导航——hover 展开大纲，点击跳转定位（黄色闪烁），收起态显示激活消息视口 10 条窗口
+- 🖱️ **鼠标手势**：右键上拖 = 滚到页顶，右键下拖 = 滚到底，先上后下 = 刷新页面（带轨迹与动作提示）
+- 🔍 **缩放浮标**：Ctrl+滚轮 / `+` / `-` / `0` 缩放页面，屏幕中央实时显示缩放百分比
+- 💬 **微信通道**（dsh-wechat 插件）：iLink bot 收微信消息 → agent 回复；本地 3082 send 服务主动推送（选股 `--push` 用）
 - 🖥️ 托盘图标（左键 显示/最小化，右键 菜单：打开 / 宠物 / 退出）
 - 🪟 WebView2 嵌入窗口，加载 `http://127.0.0.1:3080`（dsh web）
 - 🔄 窗口异常消失自动重建；后端断连自动恢复
@@ -32,7 +36,7 @@ graph TD
     subgraph Windows
         A[DSH-Pet-Client.exe<br/>Nim 壳 + WebView2]
         A -->|加载页面| B[dsh web 页面 :3080]
-        B --> C[dsh-term-panels 插件<br/>终端面板 / Token HUD / 悬浮按钮]
+        B --> C[dsh-term-panels 插件<br/>终端面板 / Token HUD / 悬浮按钮 / 消息大纲]
         A -->|读 pet-state.json| D[%USERPROFILE%\\pet-state.json]
     end
 
@@ -41,24 +45,31 @@ graph TD
         F[3081 终端服务<br/>server.js + node-pty]
         G[today-usage.py<br/>词元聚合]
         H[ask-pending.py<br/>提问/审批检测]
+        I[dsh-wechat 插件<br/>dsh --profile wechat]
+        J[本地 send 服务 :3082]
         E -->|会话记录| S[(~/.dsh/sessions<br/>*.jsonl.zstd)]
         F -->|fs.watch 事件驱动| S
         F -->|写入状态| D
+        I -->|iLink bot 收发| WX[(微信)]
+        I -->|agent 会话| E
+        I -->|POST /send| J
     end
 
     C -->|WebSocket /ws| F
     C -->|fetch /api/today-usage /api/balance| F
 ```
 
-**数据流**：插件在页面里渲染终端/词元 → 通过 WebSocket 和 HTTP 连 3081 终端服务 → 服务在 WSL 里跑 bash、聚合会话记录 → 宠物状态写入文件，客户端 Nim 读取控制宠物颜色。
+**数据流**：插件在页面里渲染终端/词元 → 通过 WebSocket 和 HTTP 连 3081 终端服务 → 服务在 WSL 里跑 bash、聚合会话记录 → 宠物状态写入文件，客户端 Nim 读取控制宠物颜色。微信通道由 dsh-wechat 插件（wechat profile 常驻）经 iLink bot 收发消息，本地 3082 send 服务供主动推送（如选股结果）。
 
 ## 目录结构
 
 ```
 DSH-Pet-Client/
 ├── dsh_client_full.nim   # 客户端主源码（Nim）
-├── dsh-term-panels/       # dsh web 前端插件（终端面板/HUD/按钮界面）
-├── terminal-server/       # 3081 终端服务（node + node-pty + 词元/提问检测）
+├── dsh-term-panels/       # dsh web 前端插件（终端面板/HUD/按钮界面/消息大纲/鼠标手势/缩放浮标）
+├── dsh-message-outline/   # 独立消息大纲插件（从 dsh-term-panels 抽出，纯前端零 3081 依赖）
+├── dsh-wechat/            # 微信通道插件（iLink bot <-> agent + 3082 send 服务）
+├── terminal-server/       # 3081 终端服务（node + node-pty + 词元/提问检测；backgrounds/ 终端背景图）
 ├── deploy.sh              # WSL 一键部署脚本
 ├── assets/                # 鲸鱼素材（三色 bin/ico + 托盘图标）
 └── README.md
@@ -105,6 +116,22 @@ nim c --app:gui -d:release --path:"<webui-nim路径>" --path:"<winim路径>" dsh
 | 页面右侧 `>_` 按钮 | 打开 / 收起 内嵌终端 |
 | 终端面板 `⚙` | 背景色 / 透明度 / 字号 / 字体设置 |
 | 窗口 ✕ | 弹回（保护机制），退出用托盘「退出」|
+| 左缘横杠 | hover 展开大纲 / 点击跳转定位消息（黄闪 1.6s）|
+| 右键上拖 | 滚到页顶 |
+| 右键下拖 | 滚到底部 |
+| 右键先上后下 | 刷新页面 |
+| Ctrl+滚轮 / `+` / `-` / `0` | 缩放页面 / 恢复 100%（中央浮标显示百分比）|
+
+## 版本历史
+
+| 版本 | 内容 |
+|---|---|
+| v2.1.0（当前）| 消息大纲独立插件（dsh-message-outline）、微信通道插件（dsh-wechat + 3082 send 服务）、微信会话归档隐藏；横杠大纲定稿（收起=视口 10 条窗口、行边界吸附）；README 整理 |
+| v2.0.3 | 横杠大纲交互定稿：收起/展开对齐、激活消息蓝条跟随、鼠标手势（上/下/刷新）、缩放浮标 |
+| v2.0.2 | 点✕=最小化（退出走托盘）、任务栏图标同步宠物色交替闪烁 |
+| v2.0.1 | 图片背景、交替闪烁、终端状态服务端持久化 |
+| v2.0.0 | 内嵌终端 + Token HUD + 三色宠物 + WSL 一键部署 |
+| v1.0.0（GitHub Release）| 托盘 + 悬浮鲸鱼宠物 + 自动重建（闪退修复 v15）|
 
 ## 踩过的坑（给贡献者）
 
