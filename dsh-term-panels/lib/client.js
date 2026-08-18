@@ -1387,11 +1387,28 @@ window.__ModuleLoader__.load({
 			// num 显隐 = 展开 && 非"加载历史中"（加载时隐藏行号，完成再显示）
 			let numHiddenByLoad = false;
 			let savedScrollTop = null;   // 收起（鼠标离开）时的面板滚动位置，重新展开时原样还原
+			let collapsedWin = null;     // 收起时的可见行窗口（展开面板当前视口），收起态按它显示 10 条
+			// 捕获当前可见行窗口（展开面板视口内首尾行；最多 10 条，优先保底部可见）
+			function captureVisibleWindow() {
+				if (!rows.length) return null;
+				const st = box.scrollTop;
+				const vb = st + box.clientHeight;
+				let start = 0, end = rows.length - 1;
+				for (let i = 0; i < rows.length; i++) {
+					if (rows[i].row.offsetTop + rows[i].row.offsetHeight > st) { start = i; break; }
+				}
+				for (let i = rows.length - 1; i >= 0; i--) {
+					if (rows[i].row.offsetTop < vb) { end = i; break; }
+				}
+				while (end - start + 1 > 10 && start < end) start++;
+				return { start, end };
+			}
 			function updateExpanded(on) {
 				const wasExpanded = expanded;
 				if (expanded && !on) {
-					// 离开前记住位置：展开状态下的滚动位置，下次展开不移动
+					// 离开前记住：面板滚动位置 + 当前可见行窗口（收起态显示这 10 条，蓝条停在激活消息槽位）
 					savedScrollTop = box.scrollTop;
+					collapsedWin = captureVisibleWindow();
 				}
 				expanded = on;
 				box.style.background = on
@@ -1403,22 +1420,11 @@ window.__ModuleLoader__.load({
 				box.style.width = on ? "320px" : "auto";
 				box.style.minWidth = on ? "" : "30px";   // 收起态保证可 hover 热区
 				box.style.overflowY = on ? "auto" : "hidden";   // 收起态无滚动条
-				// 收起态 = 10 条窗口：以激活消息居中（顶部/底部钳制；无激活=最近10条），
-				// 蓝条在窗口内对应位置（applyActive 上色）；展开态 = 全部行
-				let winStart, winEnd;
-				if (activeIdx >= 0) {
-					winStart = activeIdx - 4;
-					winEnd = activeIdx + 5;
-					if (winStart < 0) { winEnd -= winStart; winStart = 0; }
-					if (winEnd > userMsgs.length - 1) {
-						winStart -= winEnd - (userMsgs.length - 1);
-						winEnd = userMsgs.length - 1;
-						winStart = Math.max(0, winStart);
-					}
-				} else {
-					winStart = Math.max(0, userMsgs.length - 10);
-					winEnd = userMsgs.length - 1;
-				}
+				box.style.maxHeight = on ? "260px" : "";   // 收起态按内容自适应（10 条完整显示）
+				// 收起态 = 展开面板当前视口的 10 条窗口（从未展开过则默认最近 10 条）；
+				// 蓝条停在激活消息在窗口内的槽位（applyActive 上色）；展开态 = 全部行
+				const winStart = collapsedWin ? collapsedWin.start : Math.max(0, userMsgs.length - 10);
+				const winEnd = collapsedWin ? collapsedWin.end : userMsgs.length - 1;
 				for (const r of rows) {
 					const inWin = r.idx >= winStart && r.idx <= winEnd;
 					r.row.style.display = (on || inWin) ? "flex" : "none";
@@ -1528,8 +1534,6 @@ window.__ModuleLoader__.load({
 					if (idx >= 0 && idx !== activeIdx) {
 						activeIdx = idx;
 						applyActive();
-						// 激活消息变化 → 刷新收起态可见性（蓝条跟随当前消息，含最近10条之外的）
-						updateExpanded(expanded);
 					}
 					return;
 				}
