@@ -1,4 +1,4 @@
-# DSH Pet Client v2.1.0
+# DSH Pet Client v2.1.1
 
 DeepSeek Harness 的 Windows 桌面客户端——托盘 + 悬浮鲸鱼宠物 + **内嵌终端** + **Token HUD** + **微信通道**。
 
@@ -126,7 +126,8 @@ nim c --app:gui -d:release --path:"<webui-nim路径>" --path:"<winim路径>" dsh
 
 | 版本 | 内容 |
 |---|---|
-| v2.1.0（当前）| 消息大纲独立插件（dsh-message-outline）、微信通道插件（dsh-wechat + 3082 send 服务）、微信会话归档隐藏；横杠大纲定稿（收起=视口 10 条窗口、行边界吸附）；README 整理 |
+| v2.1.1（当前）| Token HUD 增强：余额<5 元红色警示、「花费」行高峰/空闲状态（DeepSeek 峰谷定价官方规则 9:00-12:00/14:00-18:00，UTC+8）；dsh 版本更新提示（右下角一键更新，自动升级 npm 包 + 打开终端预输入 sudo 重启）；终端面板毛玻璃对齐 Token HUD；消息大纲拆分为独立 npm 插件 dsh-message-outline（v0.1.1 已上架） |
+| v2.1.0 | 消息大纲独立插件（dsh-message-outline）、微信通道插件（dsh-wechat + 3082 send 服务）、微信会话归档隐藏；横杠大纲定稿（收起=视口 10 条窗口、行边界吸附）；README 整理 |
 | v2.0.3 | 横杠大纲交互定稿：收起/展开对齐、激活消息蓝条跟随、鼠标手势（上/下/刷新）、缩放浮标 |
 | v2.0.2 | 点✕=最小化（退出走托盘）、任务栏图标同步宠物色交替闪烁 |
 | v2.0.1 | 图片背景、交替闪烁、终端状态服务端持久化 |

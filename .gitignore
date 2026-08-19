@@ -18,3 +18,6 @@ platform-token.json
 # 本地环境
 .dsh/
 term-state.json
+
+# 运行时图片背景资源（不入库）
+terminal-server/backgrounds/

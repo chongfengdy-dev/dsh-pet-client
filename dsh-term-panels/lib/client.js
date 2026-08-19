@@ -33,6 +33,10 @@ window.__ModuleLoader__.load({
 			{ name: "微软雅黑", value: '"Microsoft YaHei", monospace' },
 		];
 
+		// 终端宿主/状态提升到模块顶层（2026-08-19：版本更新提示的 typeSudoRestart 在 apply 外需访问）
+		const termHost = document.createElement("div");
+		const termState = { term: null, fit: null, ws: null, initStarted: false };
+
 		function apply(ctx) {
 			const connection = ctx.connection;
 			if (document.getElementById(DOCK_ID)) return; // 已注入
@@ -62,7 +66,7 @@ window.__ModuleLoader__.load({
 				termPanel.root.style.transform = "";
 			}
 			// 终端宿主容器（xterm 直接渲染进父页面——不用 iframe，透明/毛玻璃才生效）
-			const termHost = document.createElement("div");
+			// termHost 已提升为模块顶层变量（2026-08-19）
 			termHost.id = TERM_HOST_ID;
 			Object.assign(termHost.style, {
 				flex: "1", minHeight: "0", position: "relative", overflow: "hidden",
@@ -70,7 +74,7 @@ window.__ModuleLoader__.load({
 			termPanel.body.appendChild(termHost);
 			document.body.appendChild(termPanel.root);
 			// 懒初始化终端（首次打开时加载 xterm.js + 建实例 + 连 WS，之后保持会话）
-			const termState = { term: null, fit: null, ws: null, initStarted: false };
+			// termState 已提升为模块顶层变量（2026-08-19）
 			injectTermStyle();
 			// ---------- 终端设置（⚙：自定义颜色 + 透明度 + 字号 + 字体，右下角按钮） ----------
 			const termSettings = loadTermSettings();
@@ -497,8 +501,8 @@ window.__ModuleLoader__.load({
 				width: "640px", height: "420px",
 				minWidth: "320px", minHeight: "200px",
 				right: "72px", top: "50%", transform: "translateY(-50%)",
-				// 容器透明 + 轻微模糊（4px）：自定义背景色半透明 + 透出内容带一点磨砂
-				background: "transparent",
+				// 容器半透明毛玻璃（30% 主题色 + blur，与 Token HUD 同款；主 2026-08-19 要求）
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
 				backdropFilter: "blur(4px)",
 				border: "1px solid var(--dsw-alias-border-l2)",
 				borderRadius: "10px",
@@ -1021,7 +1025,7 @@ window.__ModuleLoader__.load({
 			hud.grid.textContent = "";
 			// 三列：名称 | 数据 | 金额（主定稿 2026-08-17）
 			// 列布局用 CSS grid（grid 容器已设 grid-template-columns: 1fr auto auto）
-			const row = (label, value, cost, valueColor) => {
+			const row = (label, value, cost, valueColor, costColor) => {
 				const d = document.createElement("div");
 				Object.assign(d.style, {
 					display: "grid",
@@ -1039,7 +1043,7 @@ window.__ModuleLoader__.load({
 				v.textContent = value;
 				const c = document.createElement("span");
 				c.style.fontFamily = 'Consolas, monospace';
-				c.style.color = "var(--dsw-alias-label-primary)";
+				c.style.color = costColor || "var(--dsw-alias-label-primary)";
 				c.style.textAlign = "right";
 				c.style.minWidth = "52px";
 				c.textContent = cost;
@@ -1059,13 +1063,26 @@ window.__ModuleLoader__.load({
 			hud.grid.appendChild(row("未命中", fmt(hitTotal - hit), money(state.inputMissCost)));
 			hud.grid.appendChild(row("命中率", hitRate + "%", "—"));
 			hud.grid.appendChild(row("输出", fmt(state.output), money(state.outputCost)));
-			hud.grid.appendChild(row("花费", "—", state.cost !== null ? "¥" + state.cost.toFixed(2) : "—"));
-			hud.grid.appendChild(row("余额", "—", state.balance !== null ? "¥" + state.balance : "…"));
+			// 高峰/空闲状态：DeepSeek 峰谷定价（官网：高峰=北京时间 9:00-12:00、14:00-18:00，其余为空闲），高峰红色显示（主 2026-08-19 要求）
+			const peak = isDeepSeekPeak();
+			hud.grid.appendChild(row("花费", peak ? "高峰" : "空闲", state.cost !== null ? "¥" + state.cost.toFixed(2) : "—", peak ? "#f85149" : undefined));
+			// 余额 < 5 元红色警示（主 2026-08-19 要求）
+			const bal = state.balance !== null ? parseFloat(state.balance) : null;
+			hud.grid.appendChild(row("余额", "—", bal !== null ? "¥" + bal : "…", undefined, bal !== null && bal < 5 ? "#f85149" : undefined));
 		}
 		function fmt(n) {
 			if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
 			if (n >= 1e3) return (n / 1e3).toFixed(1) + "k";
 			return String(n);
+		}
+
+		// DeepSeek 峰谷定价判定（官网 api-docs.deepseek.com/zh-cn/quick_start/pricing 原文）：
+		// "高峰时段为北京时间 9:00 - 12:00、14:00 - 18:00（其余为空闲时段）"——无工作日限定，只看时刻。
+		// 按北京时间（UTC+8，不依赖本机时区），高峰红色显示。
+		function isDeepSeekPeak() {
+			const bj = new Date(Date.now() + 8 * 3600 * 1000);
+			const minutes = bj.getUTCHours() * 60 + bj.getUTCMinutes();
+			return (minutes >= 9 * 60 && minutes < 12 * 60) || (minutes >= 14 * 60 && minutes < 18 * 60);
 		}
 
 		// ---------- 今日词元：平台用量接口优先，失败回落本地会话聚合 ----------
@@ -1557,6 +1574,95 @@ window.__ModuleLoader__.load({
 
 			document.body.appendChild(box);
 		}
+
+			// ---- dsh 版本更新提示（主 2026-08-19 需求：有新版时右下角提示） ----
+			function checkDshUpdate() {
+				fetch("http://127.0.0.1:3081/api/dsh-version", { mode: "cors" })
+					.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+					.then((d) => {
+						if (!d || !d.hasUpdate || !d.latest) return;
+						try {
+							if (localStorage.getItem("dsh-ignored-version") === d.latest) return;
+						} catch (e) {}
+						showUpdateToast(d.local, d.latest);
+					})
+					.catch(() => {});
+			}
+			function showUpdateToast(local, latest) {
+				if (document.getElementById("dsh-update-toast")) return;
+				const t = document.createElement("div");
+				t.id = "dsh-update-toast";
+				// 宽度与 Token HUD 一致（主 2026-08-19 要求）
+				const hudEl = document.getElementById(HUD_ID);
+				const hudW = hudEl ? hudEl.offsetWidth : 210;
+				t.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:99999;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);border-radius:10px;padding:12px 14px;font:12px/1.7 -apple-system,'Segoe UI',sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.25);width:" + hudW + "px;box-sizing:border-box";
+				const status = document.createElement("div");
+				status.style.cssText = "margin-top:6px;opacity:.85;white-space:pre-line";
+				t.innerHTML = '<div style="color:var(--dsw-alias-state-business-primary);font-weight:700;margin-bottom:4px">⬆ dsh 有新版本</div>'
+					+ '<div>当前 <b>' + (local || "?") + '</b> → 最新 <b>' + latest + '</b></div>';
+				t.appendChild(status);
+				const btns = document.createElement("div");
+				btns.style.cssText = "margin-top:10px;display:flex;gap:8px;justify-content:flex-end";
+				btns.innerHTML = '<button id="dsh-upd-later" style="background:transparent;color:var(--dsw-alias-label-secondary);border:1px solid var(--dsw-alias-border-l2);border-radius:6px;padding:4px 12px;cursor:pointer">稍后</button>'
+					+ '<button id="dsh-upd-update" style="background:var(--dsw-alias-state-business-primary);color:#fff;border:none;border-radius:6px;padding:4px 12px;cursor:pointer;font-weight:600">更新</button>';
+				t.appendChild(btns);
+				document.body.appendChild(t);
+				t.querySelector("#dsh-upd-later").onclick = () => t.remove();
+				t.querySelector("#dsh-upd-update").onclick = () => {
+					const btn = t.querySelector("#dsh-upd-update");
+					btn.disabled = true;
+					btn.textContent = "更新中…";
+					status.textContent = "正在安装 @deepseek-ai/dsh，请稍候…";
+					fetch("http://127.0.0.1:3081/api/dsh-update", { method: "POST", mode: "cors" })
+						.then((r) => r.json())
+						.then((d) => {
+							if (d && d.ok) {
+								if (d.restarted) {
+									status.textContent = "✅ 已更新到 " + (d.local || "最新版") + "，服务已重启，页面即将刷新…";
+									btn.style.display = "none";
+									setTimeout(() => location.reload(), 1800);
+								} else {
+									status.textContent = "✅ 已更新到 " + (d.local || "最新版") + "\n正在打开终端执行 sudo 重启…";
+									btn.style.display = "none";
+									typeSudoRestart(status);
+								}
+							} else {
+								status.textContent = "❌ 更新失败：" + ((d && d.error) || "未知错误") + "\n可手动执行：npm install -g @deepseek-ai/dsh";
+								btn.textContent = "重试";
+								btn.disabled = false;
+							}
+						})
+						.catch((e) => {
+							status.textContent = "❌ 更新失败：" + (e && e.message ? e.message : "网络/服务异常") + "\n可手动执行：npm install -g @deepseek-ai/dsh";
+							btn.textContent = "重试";
+							btn.disabled = false;
+						});
+				};
+			}
+			// 打开终端面板并预输入 sudo 重启命令（主 2026-08-19 要求：等用户在终端输 sudo 密码）
+			function typeSudoRestart(statusEl) {
+				ensureTerminal(termState, termHost);
+				openPanel(TERM_PANEL_ID);
+				let tries = 0;
+				const timer = setInterval(() => {
+					const s = window.__dshTermState;
+					tries++;
+					if (s && s.term && s.ws && s.ws.readyState === WebSocket.OPEN) {
+						clearInterval(timer);
+						s.term.paste("sudo systemctl restart dsh-web");
+						// 回车走 WS 直发（paste 会包 bracketed paste 包装，\r 变普通字符不执行；主 2026-08-19 实测少回车）
+						setTimeout(() => {
+							const st = window.__dshTermState;
+							if (st && st.ws && st.ws.readyState === WebSocket.OPEN) st.ws.send("\r");
+						}, 250);
+						if (statusEl) statusEl.textContent += "\n请在终端输入 sudo 密码…";
+					} else if (tries > 40) {
+						clearInterval(timer);
+						if (statusEl) statusEl.textContent += "\n⚠ 终端未就绪，请手动执行：sudo systemctl restart dsh-web";
+					}
+				}, 300);
+			}
+			setTimeout(checkDshUpdate, 2500);
 
 exports.apply = apply;
 		exports.inject = ["connection", "sessions"];

@@ -254,6 +254,57 @@ app.get('/api/balance', (req, res) => {
   req2.end();
 });
 
+// ---------- dsh 版本检测（2026-08-19 主要求：有新版时前端提示） ----------
+// ⚠️ DEMO_MODE = 演示模式（给主演示提示条/更新流程）：模拟有新版 rc.8、点更新跳过真实安装。
+//    恢复真实逻辑：DEMO_MODE 改 false，/api/dsh-version 走 30min 缓存 npm 查询，/api/dsh-update 走真实 npm install。
+const DEMO_MODE = false;  // 已恢复真实逻辑（2026-08-19 主验收演示后关闭）
+let dshVerCache = { at: 0, data: null };
+const DSH_LOCAL_PKG = '/home/dream/.npm-global/lib/node_modules/@deepseek-ai/dsh/package.json';
+function refreshDshVersion() {
+  let local = null;
+  try {
+    local = require(DSH_LOCAL_PKG).version;
+  } catch (e) {
+    try {
+      local = require('child_process').execSync('/home/dream/.npm-global/bin/dsh --version', { timeout: 5000 }).toString().trim() || null;
+    } catch (e2) {}
+  }
+  const finish = (latest) => {
+    dshVerCache = { at: Date.now(), data: { local, latest, hasUpdate: !!(local && latest && local !== latest) } };
+  };
+  const req = https.request({ host: 'registry.npmjs.org', path: '/@deepseek-ai/dsh/latest', method: 'GET', timeout: 8000 }, (resp) => {
+    let body = '';
+    resp.on('data', (c) => { body += c; });
+    resp.on('end', () => {
+      try { const d = JSON.parse(body); finish(d.version || null); } catch (e) { finish(null); }
+    });
+  });
+  req.on('error', () => finish(null));
+  req.on('timeout', () => req.destroy());
+  req.end();
+}
+app.get('/api/dsh-version', (req, res) => {
+  if (DEMO_MODE) return res.json({ local: '0.1.0-rc.7', latest: '0.1.0-rc.9-demo', hasUpdate: true });
+  if (!dshVerCache.data || Date.now() - dshVerCache.at > 30 * 60 * 1000) refreshDshVersion();
+  res.json(dshVerCache.data || { local: null, latest: null, hasUpdate: false, note: 'checking' });
+});
+
+// ---------- dsh 一键更新（2026-08-19 主要求：提示条点「更新」即执行） ----------
+app.post('/api/dsh-update', (req, res) => {
+  // 演示模式：跳过真实安装，直接返回成功（主 2026-08-19 要求：演示流程不真更新）
+  if (DEMO_MODE) return res.json({ ok: true, local: '0.1.0-rc.9-demo', restarted: false });
+  const { execFile } = require('child_process');
+  execFile('/usr/bin/npm', ['install', '-g', '@deepseek-ai/dsh', '--cache', '/tmp/npm-cache-dsh-update'], { timeout: 180000 }, (err, stdout, stderr) => {
+    if (err) return res.status(500).json({ ok: false, error: String(stderr || stdout || err).slice(0, 400) });
+    dshVerCache = { at: 0, data: null };  // 清缓存，下次重新读新版本
+    execFile('sudo', ['-n', 'systemctl', 'restart', 'dsh-web'], { timeout: 30000 }, (err2) => {
+      let local = null;
+      try { local = require('/home/dream/.npm-global/lib/node_modules/@deepseek-ai/dsh/package.json').version; } catch (e) {}
+      res.json({ ok: true, local, restarted: !err2 });
+    });
+  });
+});
+
 // ---------- 平台用量代理（Token HUB 六项数据源：输入命中/未命中/输出/今日消耗） ----------
 // 2026-08-17 主定稿：余额走官方 API（/api/balance），其余走 DeepSeek 开放平台
 // 私有用量接口（platform.deepseek.com/api/v0/usage/amount|cost，需网页登录 token）。
