@@ -437,7 +437,7 @@ window.__ModuleLoader__.load({
 			fetchUsage(hud, hudState);
 			setInterval(() => fetchUsage(hud, hudState), 10000);
 			refreshBalance(hud, hudState);
-			setInterval(() => refreshBalance(hud, hudState), 120000); // 余额 2 分钟刷新
+			setInterval(() => refreshBalance(hud, hudState), 30000); // 余额 30s 刷新（2026-08-21 主定）
 
 			// ---------- 左缘消息大纲条（当前会话我的消息，hover 展开） ----------
 			buildMessageOutline(ctx);
@@ -1656,6 +1656,32 @@ window.__ModuleLoader__.load({
 							if (st && st.ws && st.ws.readyState === WebSocket.OPEN) st.ws.send("\r");
 						}, 250);
 						if (statusEl) statusEl.textContent += "\n请在终端输入 sudo 密码…";
+						// 2026-08-20 主要求：手动重启完成后自动刷新页面。
+						// 轮询版本接口：hasUpdate 变 false（本地=最新，更新已生效）且 dsh-web 页面可访问时自动刷新；
+						// 轮询 3081（独立进程，dsh-web 重启不影响），超时 6 分钟停止等待。
+						let pollTries = 0;
+						const pollTimer = setInterval(() => {
+							pollTries++;
+							fetch("http://127.0.0.1:3081/api/dsh-version", { mode: "cors" })
+								.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
+								.then((d) => {
+									if (d && d.local && d.latest && !d.hasUpdate) {
+										fetch(location.origin + "/", { cache: "no-store" })
+											.then((r) => {
+												if (r.ok) {
+													clearInterval(pollTimer);
+													if (statusEl) statusEl.textContent += "\n✅ 更新已生效，页面即将刷新…";
+													setTimeout(() => location.reload(), 1200);
+												}
+											})
+											.catch(() => {});
+									} else if (pollTries > 120) {
+										clearInterval(pollTimer);
+										if (statusEl) statusEl.textContent += "\n⏳ 等待超时，请手动刷新页面";
+									}
+								})
+								.catch(() => {});
+						}, 3000);
 					} else if (tries > 40) {
 						clearInterval(timer);
 						if (statusEl) statusEl.textContent += "\n⚠ 终端未就绪，请手动执行：sudo systemctl restart dsh-web";

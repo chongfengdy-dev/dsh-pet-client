@@ -38,7 +38,8 @@ const https = require('https');
 function readDeepSeekKey() {
   try {
     const yaml = fs.readFileSync(path.join(os.homedir(), '.dsh/.credentials.yaml'), 'utf8');
-    const m = yaml.match(/^DEEPSEEK_API_KEY:\s*(.+)$/m);
+    // ⚠️ key 在 refs: 嵌套下带缩进（2026-08-21 bug：余额一直不显示，根因即此）
+    const m = yaml.match(/^\s*DEEPSEEK_API_KEY:\s*(.+)$/m);
     return m ? m[1].trim() : null;
   } catch (e) {
     return null;
@@ -225,7 +226,7 @@ app.get('/api/today-usage', (req, res) => {
   refreshTodayUsage();   // 异步触发聚合（下次请求拿到新值）
 });
 app.get('/api/balance', (req, res) => {
-  if (balanceCache.data && Date.now() - balanceCache.at < 120000) {
+  if (balanceCache.data && Date.now() - balanceCache.at < 30000) {  // 余额 30s 缓存（2026-08-21 主定）
     return res.json(balanceCache.data);
   }
   const key = readDeepSeekKey();
@@ -260,15 +261,18 @@ app.get('/api/balance', (req, res) => {
 const DEMO_MODE = false;  // 已恢复真实逻辑（2026-08-19 主验收演示后关闭）
 let dshVerCache = { at: 0, data: null };
 const DSH_LOCAL_PKG = '/home/dream/.npm-global/lib/node_modules/@deepseek-ai/dsh/package.json';
-function refreshDshVersion() {
-  let local = null;
+// ⚠️ 用 fs 读版本而非 require()：require 有模块缓存，npm install 更新后进程内仍读到旧版本
+// （2026-08-20 bug：点更新后磁盘已是 0.1.1-rc.1 但页面一直显示 0.1.0-rc.7，根因即此）
+function readLocalDshVersion() {
   try {
-    local = require(DSH_LOCAL_PKG).version;
-  } catch (e) {
-    try {
-      local = require('child_process').execSync('/home/dream/.npm-global/bin/dsh --version', { timeout: 5000 }).toString().trim() || null;
-    } catch (e2) {}
-  }
+    return JSON.parse(fs.readFileSync(DSH_LOCAL_PKG, 'utf8')).version || null;
+  } catch (e) {}
+  try {
+    return require('child_process').execSync('/home/dream/.npm-global/bin/dsh --version', { timeout: 5000 }).toString().trim() || null;
+  } catch (e2) { return null; }
+}
+function refreshDshVersion() {
+  const local = readLocalDshVersion();
   const finish = (latest) => {
     dshVerCache = { at: Date.now(), data: { local, latest, hasUpdate: !!(local && latest && local !== latest) } };
   };
@@ -298,8 +302,7 @@ app.post('/api/dsh-update', (req, res) => {
     if (err) return res.status(500).json({ ok: false, error: String(stderr || stdout || err).slice(0, 400) });
     dshVerCache = { at: 0, data: null };  // 清缓存，下次重新读新版本
     execFile('sudo', ['-n', 'systemctl', 'restart', 'dsh-web'], { timeout: 30000 }, (err2) => {
-      let local = null;
-      try { local = require('/home/dream/.npm-global/lib/node_modules/@deepseek-ai/dsh/package.json').version; } catch (e) {}
+      const local = readLocalDshVersion();  // fs 读取，绕过 require 缓存
       res.json({ ok: true, local, restarted: !err2 });
     });
   });
