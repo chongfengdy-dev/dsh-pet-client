@@ -33,6 +33,46 @@ const INITIAL_UPDATES_BUF = "ChAIRBDT86GPgTQYyqLstuozEjplNjkwMTlhZDRmMjJAaW0uYm9
 function dshHome() {
 	return process.env.DSH_HOME || path.join(os.homedir(), ".dsh");
 }
+
+// 检查 session 是否已持久化在磁盘（复刻 dsh-session-persistence-jsonl 的目录编码：
+// projectKey(cwd) 把 / \ : 换为 -、特殊字符转 ~XXXX；id 同样 ~XXXX 转义）
+function encodeSegment(raw) {
+	let out = "";
+	for (let i = 0; i < raw.length; i++) {
+		const code = raw.charCodeAt(i);
+		const ch = String.fromCharCode(code);
+		if (ch !== "~" && /^[A-Za-z0-9._-]$/.test(ch)) out += ch;
+		else out += "~" + code.toString(16).toUpperCase().padStart(4, "0");
+	}
+	return out;
+}
+function projectKey(cwd) {
+	let readable = "";
+	let separatorRun = false;
+	for (let i = 0; i < cwd.length; i++) {
+		const code = cwd.charCodeAt(i);
+		const ch = String.fromCharCode(code);
+		if (ch === "/" || ch === "\\" || ch === ":") {
+			if (!separatorRun) readable += "-";
+			separatorRun = true;
+		} else if (ch !== "~" && /^[A-Za-z0-9._-]$/.test(ch)) {
+			readable += ch;
+			separatorRun = false;
+		} else {
+			readable += "~" + code.toString(16).toUpperCase().padStart(4, "0");
+			separatorRun = false;
+		}
+	}
+	return `--${(readable.replace(/^-+/, "") || "root").slice(0, 251)}--`;
+}
+function hasPersistedSession(sessionId, cwd = process.cwd()) {
+	try {
+		const root = path.join(dshHome(), "sessions");
+		const dir = path.join(root, projectKey(cwd), encodeSegment(sessionId));
+		return fs.existsSync(path.join(dir, "session.jsonl.zstd")) ||
+			fs.existsSync(path.join(dir, "session.jsonl"));
+	} catch { return false; }
+}
 function syncFile(cfg) {
 	const dir = path.join(dshHome(), "wechat");
 	fs.mkdirSync(dir, { recursive: true });
@@ -88,14 +128,29 @@ async function askAgent(state, ctx, peerKey, userText) {
 	const sessionId = SessionId(rawSessionId);
 	let entry = state.agents.get(peerKey);
 	if (!entry) {
-		const { agent } = await agents.create({
-			sessionId,
-			meta: { cwd: process.cwd() },
-			agentOptions: { provider: selection.provider, model: selection.model },
-			setup: (agentCtx) => {
-				installModelSelection(agentCtx, { current: selection, assembled: void 0 });
-			},
-		});
+		// 2026-08-25 修复：dsh 0.1.1-rc.2 起会话持久化校验加强——磁盘已有该 session
+		// 日志时 create 会撞 adoptLivePrefix 校验（id collision），须用 resume 恢复。
+		// 存在持久化 session 文件 → resume；否则 create。
+		const sessionExists = hasPersistedSession(rawSessionId);
+		let agent;
+		if (sessionExists) {
+			({ agent } = await agents.resume({
+				resumeSessionId: sessionId,
+				agentOptions: { provider: selection.provider, model: selection.model },
+				setup: (agentCtx) => {
+					installModelSelection(agentCtx, { current: selection, assembled: void 0 });
+				},
+			}));
+		} else {
+			({ agent } = await agents.create({
+				sessionId,
+				meta: { cwd: process.cwd() },
+				agentOptions: { provider: selection.provider, model: selection.model },
+				setup: (agentCtx) => {
+					installModelSelection(agentCtx, { current: selection, assembled: void 0 });
+				},
+			}));
+		}
 		entry = { agent };
 		state.agents.set(peerKey, entry);
 		ensureSessionArchived(rawSessionId);   // 微信会话隐藏出 GUI 列表
