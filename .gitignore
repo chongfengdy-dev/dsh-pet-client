@@ -21,3 +21,7 @@ term-state.json
 
 # 运行时图片背景资源（不入库）
 terminal-server/backgrounds/
+
+# Python 缓存
+__pycache__/
+*.pyc
