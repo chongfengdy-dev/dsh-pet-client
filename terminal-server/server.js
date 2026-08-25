@@ -85,10 +85,14 @@ app.post('/api/background', (req, res) => {
 
 // ---------- 宠物状态（dsh web 插件 → 客户端 Nim） ----------
 // pet: 'blue'（终端收起，默认）| 'black'（终端打开）| 'orange'（提问/授权，心跳闪烁）
+//     | 'green'（回复完成，绿↔基态心跳闪烁；2026-08-21 主需求：提问后 dsh 干完活绿闪提示）
 // 状态同时写本地文件（客户端 Nim 读文件，避免主循环 HTTP 网络调用——
 // 实测 net 模块 send/recv 在 Windows 触发 0xc0000005 访问冲突崩溃）
 // 路径动态化（2026-08-16 主定稿）：写 Windows 用户目录根 pet-state.json，
 // 客户端 Nim 用 %USERPROFILE% 读同一位置——不再硬编码用户名/路径，换机可部署
+// green 的终止协议（2026-08-21）：Nim 检测到主窗口被提到最前（GetForegroundWindow）
+// → 写 %USERPROFILE%\pet-ack.json {doneAt} 回执；server 见 ack.doneAt >= green.doneAt
+// → 转回 blue（主已看到回复）。ack 文件由 Nim 只写、server 只读。
 let petState = { pet: 'blue' };
 function winUserHome() {
   // WSL 里解析 Windows 用户目录：/mnt/c/Users/<用户名>/（只取目录、排除系统内置与隐藏）
@@ -104,6 +108,11 @@ function winUserHome() {
   }
 }
 const PET_STATE_FILE = (winUserHome() || '/mnt/c/Users/') + 'pet-state.json';
+const PET_ACK_FILE = (winUserHome() || '/mnt/c/Users/') + 'pet-ack.json';
+function readPetAck() {
+  try { return JSON.parse(fs.readFileSync(PET_ACK_FILE, 'utf8')).doneAt || 0; }
+  catch (e) { return 0; }
+}
 function writePetStateFile() {
   try {
     fs.writeFileSync(PET_STATE_FILE, JSON.stringify(petState), 'utf8');
@@ -134,10 +143,10 @@ app.post('/api/term-state', (req, res) => {
 app.get('/api/pet-state', (req, res) => res.json(petState));
 app.post('/api/pet-state', (req, res) => {
   const pet = req.body && req.body.pet;
-  if (pet !== 'blue' && pet !== 'black' && pet !== 'orange') {
-    return res.status(400).json({ error: 'pet must be blue|black|orange' });
+  if (pet !== 'blue' && pet !== 'black' && pet !== 'orange' && pet !== 'green') {
+    return res.status(400).json({ error: 'pet must be blue|black|orange|green' });
   }
-  petState = { pet };
+  petState = { pet, doneAt: pet === 'green' ? (req.body.doneAt || Date.now()) : undefined };
   writePetStateFile();
   res.json(petState);
 });
@@ -170,12 +179,15 @@ app.post('/api/outline-history', (req, res) => {
   }
 });
 // 提问检测（权威源）：会话记录 approval/asked vs decided，
-// 有未决提问 → orange；否则 blue（黑/蓝由客户端本地按窗口状态决定）。
+// 有未决提问 → orange；回复完成（turn 配对，用户提问触发的轮次）→ green；否则 blue
+// （黑/蓝由客户端本地按窗口状态决定）。
 // 前端事件通道（subscribeEnvelopes）是诊断用途收不到业务事件，改后端检测。
 // 事件驱动（2026-08-16 主要求省资源）：fs.watch 监听会话目录，有写入才检测
 // （防抖合并），静默期零检测零消耗；不再固定 2 秒轮询解压。
 // 每次检测都写文件（不能只写"变化时"——服务重启内存重置 blue 后，旧文件
 // orange 永不被覆盖，Nim 会一直读到橙色闪烁；2026-08-16 实测踩坑）
+// green 的确认（2026-08-21）：Nim 窗口置前写 pet-ack.json → 本检测见
+// ack.doneAt >= doneAt 判定为已看 → 转 blue（不覆盖 ack 文件，Nim 每次置前都重写）
 const { execFile } = require('child_process');
 let askRunning = false;
 let askPending = false;
@@ -187,7 +199,13 @@ function runAskDetection() {
     if (!err) {
       try {
         const r = JSON.parse(stdout);
-        petState = { pet: r.asking ? 'orange' : 'blue' };
+        if (r.asking) {
+          petState = { pet: 'orange' };
+        } else if (r.done && !(readPetAck() >= (r.doneAt || 0))) {
+          petState = { pet: 'green', doneAt: r.doneAt || Date.now() };
+        } else {
+          petState = { pet: 'blue' };
+        }
         writePetStateFile();
       } catch (e) { /* 解析失败保持现状 */ }
     }
@@ -327,6 +345,29 @@ function readPlatformToken() {
   } catch (e) { return null; }
 }
 
+// 自动刷新平台 token（2026-08-25 主要求：不再手动 F12 找 token）。
+// 读 CentBrowser localStorage（platform.deepseek.com userToken，明文 LevelDB），
+// 主一直登录着开放平台 → token 随时可取。由 fetch-platform-token.py 完成。
+let platformTokenRefreshing = false;
+function autoRefreshPlatformToken() {
+  if (platformTokenRefreshing) return Promise.resolve(false);
+  platformTokenRefreshing = true;
+  return new Promise((resolve) => {
+    execFile('python3', [path.join(__dirname, 'fetch-platform-token.py'), '--write'],
+      { timeout: 15000, env: { ...process.env, PYTHONPATH: '/tmp/py-libs' } },
+      (err, stdout) => {
+        platformTokenRefreshing = false;
+        if (!err) {
+          console.log('[term] platform token auto-refreshed:', String(stdout).trim());
+          resolve(true);
+        } else {
+          console.log('[term] platform token refresh failed:', String(err.message || err).slice(0, 200));
+          resolve(false);
+        }
+      });
+  });
+}
+
 function platformGet(apiPath) {
   const token = readPlatformToken();
   if (!token) return Promise.reject(new Error('no platform token'));
@@ -348,7 +389,20 @@ function platformGet(apiPath) {
       let body = '';
       resp.on('data', (c) => { body += c; });
       resp.on('end', () => {
-        try { resolve(JSON.parse(body)); } catch (e) { reject(new Error('bad json from platform')); }
+        try {
+          const data = JSON.parse(body);
+          // 平台对无效 token 返回 HTTP 200 + {"code":40003,"msg":"Authorization Failed"}
+          // （2026-08-25 实测；非 401/403）
+          const authFail = resp.statusCode === 401 || resp.statusCode === 403 ||
+            (data && (data.code === 40003 || data.code === 40001));
+          if (authFail) {
+            const err = new Error('platform auth failed (' + resp.statusCode + ') code=' + (data && data.code));
+            err.authFailed = true;
+            err.raw = data;
+            return reject(err);
+          }
+          resolve(data);
+        } catch (e) { reject(new Error('bad json from platform')); }
       });
     });
     req.on('error', reject);
@@ -382,47 +436,66 @@ function findDayData(days, dateStr) {
 let platformUsageCache = { at: 0, data: null, error: null };
 let platformUsageBusy = false;
 
-function refreshPlatformUsage() {
+function buildUsage(amount, cost) {
+  const cBizRaw = cost && cost.data && cost.data.biz_data;
+  const cBiz = Array.isArray(cBizRaw) ? (cBizRaw[0] || {}) : (cBizRaw || {});
+  const today = localDateStr();
+  const aData = findDayData(amount && amount.data && amount.data.biz_data ? amount.data.biz_data.days : null, today);
+  const cData = findDayData(cBiz.days, today);
+  const hitCost = sumUsageType(cData, 'PROMPT_CACHE_HIT_TOKEN');
+  const missCost = sumUsageType(cData, 'PROMPT_CACHE_MISS_TOKEN');
+  const outCost = sumUsageType(cData, 'RESPONSE_TOKEN');
+  return {
+    source: 'platform', date: today,
+    inputHit: sumUsageType(aData, 'PROMPT_CACHE_HIT_TOKEN'),
+    inputHitCost: hitCost,
+    inputMiss: sumUsageType(aData, 'PROMPT_CACHE_MISS_TOKEN'),
+    inputMissCost: missCost,
+    output: sumUsageType(aData, 'RESPONSE_TOKEN'),
+    outputCost: outCost,
+    requests: sumUsageType(aData, 'REQUEST'),
+    cost: hitCost + missCost + outCost,
+    costCurrency: cBiz.currency || 'CNY',
+  };
+}
+
+async function refreshPlatformUsage() {
   if (platformUsageBusy) return;
   platformUsageBusy = true;
   const now = new Date();
   const q = `?month=${now.getMonth() + 1}&year=${now.getFullYear()}`;
-  Promise.all([
-    platformGet('/api/v0/usage/amount' + q),
-    platformGet('/api/v0/usage/cost' + q),
-  ]).then(([amount, cost]) => {
-    const aBiz = amount && amount.data && amount.data.biz_data;
-    const cBizRaw = cost && cost.data && cost.data.biz_data;
-    const cBiz = Array.isArray(cBizRaw) ? (cBizRaw[0] || {}) : (cBizRaw || {});
-    const today = localDateStr();
-    const aData = findDayData(aBiz ? aBiz.days : null, today);
-    const cData = findDayData(cBiz.days, today);
-    const hit = sumUsageType(aData, 'PROMPT_CACHE_HIT_TOKEN');
-    const miss = sumUsageType(aData, 'PROMPT_CACHE_MISS_TOKEN');
-    // 金额按类型拆分（cost 接口同 type 枚举，HUD 三列：名称/数据/金额）
-    const hitCost = sumUsageType(cData, 'PROMPT_CACHE_HIT_TOKEN');
-    const missCost = sumUsageType(cData, 'PROMPT_CACHE_MISS_TOKEN');
-    const outCost = sumUsageType(cData, 'RESPONSE_TOKEN');
-    platformUsageCache = {
-      at: Date.now(),
-      data: {
-        source: 'platform',
-        date: today,
-        inputHit: hit,
-        inputHitCost: hitCost,
-        inputMiss: miss,
-        inputMissCost: missCost,
-        output: sumUsageType(aData, 'RESPONSE_TOKEN'),
-        outputCost: outCost,
-        requests: sumUsageType(aData, 'REQUEST'),
-        cost: hitCost + missCost + outCost,
-        costCurrency: cBiz.currency || 'CNY',
-      },
-      error: null,
-    };
-  }).catch((e) => {
-    platformUsageCache = { at: Date.now(), data: null, error: String(e && e.message || e) };
-  }).finally(() => { platformUsageBusy = false; });
+  try {
+    const [amount, cost] = await Promise.all([
+      platformGet('/api/v0/usage/amount' + q),
+      platformGet('/api/v0/usage/cost' + q),
+    ]);
+    platformUsageCache = { at: Date.now(), data: buildUsage(amount, cost), error: null };
+  } catch (e) {
+    // token 失效（401/403）→ 自动刷新后重试一次（2026-08-25 主要求：不手动 F12）
+    if (e && e.authFailed) {
+      console.log('[term] platform token invalid -> auto refresh & retry');
+      const ok = await autoRefreshPlatformToken();
+      if (ok) {
+        try {
+          const now2 = new Date();
+          const q2 = `?month=${now2.getMonth() + 1}&year=${now2.getFullYear()}`;
+          const [amount2, cost2] = await Promise.all([
+            platformGet('/api/v0/usage/amount' + q2),
+            platformGet('/api/v0/usage/cost' + q2),
+          ]);
+          platformUsageCache = { at: Date.now(), data: buildUsage(amount2, cost2), error: null };
+        } catch (e2) {
+          platformUsageCache = { at: Date.now(), data: null, error: String(e2 && e2.message || e2) };
+        }
+      } else {
+        platformUsageCache = { at: Date.now(), data: null, error: 'token refresh failed' };
+      }
+    } else {
+      platformUsageCache = { at: Date.now(), data: null, error: String(e && e.message || e) };
+    }
+  } finally {
+    platformUsageBusy = false;
+  }
 }
 refreshPlatformUsage();
 setInterval(refreshPlatformUsage, 60000);

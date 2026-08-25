@@ -37,6 +37,8 @@ var
   gLastH = 0
   gCloseCount = 0
   gBackendDown = false      # 后端断连标志（后端不可达时停止重建尝试，等恢复）
+  gBackendWasDown = false   # 后端曾不可达（2026-08-21：重启 dsh-web 后自动刷新内嵌页面用）
+  gBackendCheckTick: int64 = 0  # 后端存活轮询节流计时
   gLastRetryTime: int64     # 上次窗口重建尝试时间（限频，GetTickCount64 返回 int64）
   gLastTitleCheck: int64    # 上次标题强制检查时间
   gWindowMinimized = false  # 自己跟踪窗口状态，不依赖 IsIconic
@@ -184,9 +186,10 @@ proc onWebuiClose(window: csize_t): bool {.cdecl.} =
 # ---------- 托盘 ----------
 
 proc loadWhaleIcon(size: int32, color: int = 0): HICON =
-  ## 加载鲸鱼图标（0=蓝 1=黑 2=橙；用主提供的 deepseek-color-* 生成的三色 ico）
-  const icoFiles = ["assets\\fish_blue.ico", "assets\\fish_black.ico", "assets\\fish_orange.ico"]
-  let idx = if color >= 0 and color <= 2: color else: 0
+  ## 加载鲸鱼图标（0=蓝 1=黑 2=橙 3=绿；用主提供的 deepseek-color-* 生成的四色 ico）
+  const icoFiles = ["assets\\fish_blue.ico", "assets\\fish_black.ico",
+                    "assets\\fish_orange.ico", "assets\\fish_green.ico"]
+  let idx = if color >= 0 and color <= 3: color else: 0
   let icoPath = getAppDir() & "\\" & icoFiles[idx]
   result = LoadImageW(0, icoPath.cstring, IMAGE_ICON, size, size,
                       LR_LOADFROMFILE).HICON
@@ -299,10 +302,11 @@ const
   MAX_BUBBLES = 12          # 最多泡泡数
   FISH_BIN_W = FISH_DRAW    # 鲸鱼像素宽（fish_*.bin）
   FISH_BIN_H = FISH_DRAW    # 鲸鱼像素高
-  # 三色鲸鱼（BGRA 预乘，主提供 deepseek-color-{blue,black,Orange}.png 制作，80x80）
-  FISH_BIN_BLUE = "assets\\fish_blue.bin"    # 终端收起（默认）
-  FISH_BIN_BLACK = "assets\\fish_black.bin"  # 终端打开
+  # 四色鲸鱼（BGRA 预乘，主提供 deepseek-color-{blue,black,Orange,green}.png 制作，80x80）
+  FISH_BIN_BLUE = "assets\\fish_blue.bin"    # 窗口打开（默认，2026-08-21 主定：打开=蓝）
+  FISH_BIN_BLACK = "assets\\fish_black.bin"  # 窗口最小化（2026-08-21 主定：最小化=黑）
   FISH_BIN_ORANGE = "assets\\fish_orange.bin" # 提问/要授权（心跳闪烁）
+  FISH_BIN_GREEN = "assets\\fish_green.bin"  # 回复完成（绿↔基态心跳闪烁，2026-08-21 主需求）
 
 type
   Bubble = object
@@ -327,25 +331,28 @@ var
   gBubbleTimer = 0          # 泡泡生成计时
   gBubbles: array[MAX_BUBBLES, Bubble]
   # ---- v7 像素级渲染（UpdateLayeredWindow，无品红） ----
-  # 三色鲸鱼像素：[0]=蓝（终端收起） [1]=黑（终端打开） [2]=橙（提问/授权）
-  gFishPixels: array[3, array[FISH_BIN_W * FISH_BIN_H, uint32]]
+  # 四色鲸鱼像素：[0]=蓝（窗口打开） [1]=黑（窗口最小化） [2]=橙（提问/授权） [3]=绿（回复完成）
+  gFishPixels: array[4, array[FISH_BIN_W * FISH_BIN_H, uint32]]
   gFishPixelsLoaded = false
-  gPetColor = 0             # 0=蓝 1=黑 2=橙（主循环低频轮询 3081 驱动）
-  gPetBaseColor = 0         # 基态色（非提问时颜色：最小化=蓝 0，打开=黑 1）——提问闪烁交替用
-  gPetBlinkOn = true        # 橙色心跳闪烁相位（橙/基态交替）
+  gPetColor = 0             # 0=蓝 1=黑 2=橙 3=绿（主循环低频轮询 3081 驱动）
+  gPetBaseColor = 0         # 基态色（非提问时颜色：打开=蓝 0，最小化=黑 1）——提问闪烁交替用
+  gPetBlinkOn = true        # 橙/绿心跳闪烁相位（信号色/基态交替）
   gPetBlinkTick: int64 = 0  # 心跳计时
   gPetPollTick: int64 = 0   # 宠物状态轮询计时（自适应间隔）
   gPetPollOk = false        # 上次轮询是否成功（成功 1s / 失败 5s 间隔）
   gAsking = false           # 是否正在提问/要授权（橙色心跳，来自状态文件）
+  gDoneReply = false        # 回复是否完成待确认（绿色心跳，2026-08-21 主需求）
+  gPetDoneAt = 0            # 最近一次 green 状态携带的 doneAt（时间戳）
+  gPetDoneAcked = false     # 本次 green 是否已回执（窗口置前后不再闪）
   gDibBits: ptr UncheckedArray[uint32]   # DIB 像素（96x96 BGRA 预乘）
   gMemDC: HDC
 
 proc applyPetIconColor() =
-  ## 托盘 + 任务栏图标同步为当前显示色（蓝0/黑1/橙2），并释放旧句柄防泄漏。
+  ## 托盘 + 任务栏图标同步为当前显示色（蓝0/黑1/橙2/绿3），并释放旧句柄防泄漏。
   ## 2026-08-16 主验收要求：托盘/任务栏图标与悬浮宠物同色且同相位交替闪烁——
-  ## 显示色相位与 floatPaint 完全一致：提问中(gPetColor==2)且闪烁相位 OFF 时
-  ## 显示基态色(gPetBaseColor)，否则显示 gPetColor。每 400ms 由主循环闪烁分支调用。
-  let dispColor = if gPetColor == 2 and not gPetBlinkOn: gPetBaseColor else: gPetColor
+  ## 显示色相位与 floatPaint 完全一致：提问中(gPetColor==2)或回复完成(gPetColor==3)
+  ## 且闪烁相位 OFF 时显示基态色(gPetBaseColor)，否则显示 gPetColor。每 400ms 由主循环闪烁分支调用。
+  let dispColor = if gPetColor >= 2 and not gPetBlinkOn: gPetBaseColor else: gPetColor
   # 托盘（NIM_MODIFY 后 Shell 内部复制图标，旧句柄可安全 DestroyIcon）
   let tIcon = loadWhaleIcon(32, dispColor)
   if tIcon != 0:
@@ -366,10 +373,10 @@ proc applyPetIconColor() =
       if oldSmall != 0: discard DestroyIcon(HICON(oldSmall))
 
 proc floatLoadFishBins() =
-  ## 加载三色鲸鱼像素（0=蓝 1=黑 2=橙；BGRA 预乘，小端）
-  const files = [FISH_BIN_BLUE, FISH_BIN_BLACK, FISH_BIN_ORANGE]
+  ## 加载四色鲸鱼像素（0=蓝 1=黑 2=橙 3=绿；BGRA 预乘，小端）
+  const files = [FISH_BIN_BLUE, FISH_BIN_BLACK, FISH_BIN_ORANGE, FISH_BIN_GREEN]
   var anyLoaded = false
-  for i in 0 ..< 3:
+  for i in 0 ..< 4:
     let path = getAppDir() & "\\" & files[i]
     var f: File
     if open(f, path):
@@ -381,7 +388,7 @@ proc floatLoadFishBins() =
       close(f)
   gFishPixelsLoaded = anyLoaded
   if not anyLoaded:
-    echo "[DSH-Nim] 警告: 鲸鱼像素加载失败（三色 bin 均缺失）"
+    echo "[DSH-Nim] 警告: 鲸鱼像素加载失败（四色 bin 均缺失）"
 
 proc floatInitDib() =
   ## 创建 32bpp DIB（自顶向下）+ 内存 DC，供 UpdateLayeredWindow 像素渲染
@@ -540,11 +547,11 @@ proc floatPaint(hwnd: HWND) =
   if gDibBits == nil: return
   # 1. 全透明背景（zeroMem 快速清 0，替代逐像素循环）
   zeroMem(gDibBits, FLOAT_W * FLOAT_H * sizeof(uint32))
-  # 2. 鲸鱼（over 合成，预乘；颜色按 gPetColor：0=蓝 1=黑 2=橙）
-  #    提问闪烁（橙）时交替绘制"基态色"（最小化=蓝 / 打开=黑），
-  #    即蓝↔橙 或 黑↔橙 交替（主 2026-08-16 定稿，替代"橙/消失"）
+  # 2. 鲸鱼（over 合成，预乘；颜色按 gPetColor：0=蓝 1=黑 2=橙 3=绿）
+  #    提问闪烁（橙）/回复完成闪烁（绿）时交替绘制"基态色"（打开=蓝 / 最小化=黑），
+  #    即蓝↔橙/绿 或 黑↔橙/绿 交替（主 2026-08-16 定稿橙；2026-08-21 同法加绿、基态色交换）
   if gFishPixelsLoaded:
-    let drawColor = if gPetColor == 2 and not gPetBlinkOn: gPetBaseColor else: gPetColor
+    let drawColor = if gPetColor >= 2 and not gPetBlinkOn: gPetBaseColor else: gPetColor
     let fx = int(gFishX) - FISH_BIN_W div 2
     let fy = int(gFishY) - FISH_BIN_H div 2
     for wy in 0 ..< FISH_BIN_H:
@@ -726,19 +733,37 @@ proc backendAlive(): bool =
     return false
 
 proc fetchPetState(): int =
-  ## 读 Windows 侧本地状态文件（终端服务写入），返回 0=蓝 1=黑 2=橙。
+  ## 读 Windows 侧本地状态文件（终端服务写入），返回 0=蓝 1=黑 2=橙 3=绿。
   ## 2026-08-16 崩溃修复：原 HTTP 轮询（net 模块 send/recv）在 Windows 触发
   ## 0xc0000005 访问冲突导致进程崩溃；改为读本地文件（纯文件 I/O，零网络）。
   ## 路径动态化（2026-08-16 主定稿）：%USERPROFILE%\\pet-state.json——
   ## 服务端写 Windows 用户目录根，不再硬编码用户名，换机可部署。
+  ## 2026-08-21 扩展：green=回复完成待确认（携带 doneAt），读入 gPetDoneAt。
   try:
     let body = readFile(getEnv("USERPROFILE") & "\\pet-state.json")
     if body.contains("\"pet\":\"blue\""): return 0
     if body.contains("\"pet\":\"black\""): return 1
     if body.contains("\"pet\":\"orange\""): return 2
+    if body.contains("\"pet\":\"green\""):
+      # 解析 doneAt（"doneAt":1234567890 形式）
+      let m = body.find("\"doneAt\":")
+      if m >= 0:
+        var i = m + 9
+        while i < body.len and body[i] in {'0'..'9'}: i.inc
+        gPetDoneAt = parseInt(body[m+9 ..< i])
+      return 3
     return -1
   except CatchableError:
     return -1
+
+proc writePetAck() =
+  ## 主窗口被提到最前 → 写回执文件 pet-ack.json（server 读到后把 green 转 blue）。
+  ## 2026-08-21 主需求：终止绿色信号=将 dsh 客户端窗口提到最前面。
+  try:
+    writeFile(getEnv("USERPROFILE") & "\\pet-ack.json",
+              "{\"doneAt\":" & $gPetDoneAt & "}")
+  except CatchableError:
+    discard
 
 # ---------- 主流程 ----------
 
@@ -865,36 +890,78 @@ when isMainModule:
       discard gWindow.showWv(WebUrl)
       gBackendDown = false
 
-    # ---- 宠物颜色：提问(橙,文件) > 主窗口打开(黑) > 主窗口最小化/未现(蓝) ----
-    # 2026-08-16 主定稿：颜色跟随客户端主窗口状态（打开=黑、最小化=蓝），
-    # 终端面板开关不再影响颜色；提问橙色由状态文件驱动（客户端本地零网络）
+    # ---- 后端重启检测：restart dsh-web 后自动刷新内嵌页面（2026-08-21 主要求）----
+    # 场景：主在终端执行 sudo systemctl restart dsh-web → 3080 短暂不可达 → WebView2
+    # 页面加载失败（浏览器不会自动重试失败的页面）→ 后端恢复后 navigate 刷新一次。
+    # 与上面 gBackendDown（窗口消失→重建）互补：窗口还在但页面断了 → 走 navigate（不重建）。
+    # 独立节流轮询：1 秒一次（backendAlive 是 TCP 连接探测，本地回环失败即时返回）。
+    let nowTick = GetTickCount64()
+    if nowTick - gBackendCheckTick >= 1000:
+      gBackendCheckTick = nowTick
+      let alive = backendAlive()
+      if not alive and not gBackendWasDown:
+        gBackendWasDown = true
+        dbg("backend unreachable detected")
+      elif alive and gBackendWasDown:
+        gBackendWasDown = false
+        dbg("backend recovered -> navigate refresh")
+        if findMainWindow() != 0:
+          gWindow.navigate(WebUrl)
+          dbg("navigate to " & WebUrl)
+
+    # ---- 宠物颜色：提问(橙,文件) > 回复完成(绿,文件) > 主窗口打开(蓝) > 最小化/未现(黑) ----
+    # 2026-08-16 主定稿：颜色跟随客户端主窗口状态（打开=黑、最小化=蓝）；
+    # 2026-08-21 主调整：交换基态色——打开=蓝、最小化=黑（更符合直觉）；
+    # 提问橙色/回复完成绿色由状态文件驱动（客户端本地零网络）。
     let petTick = GetTickCount64()
     let pollGap = if gPetPollOk: 1000 else: 5000   # 失败拉长间隔，少打扰主循环
     if petTick - gPetPollTick > pollGap:
       gPetPollTick = petTick
+      let prevDoneAt = gPetDoneAt
       let c = fetchPetState()
       gPetPollOk = c >= 0
       gAsking = c == 2
-    # 基态色（非提问时颜色：最小化=蓝 0 / 打开=黑 1）——提问闪烁与它交替
-    gPetBaseColor = if mainSeen and not gWindowMinimized: 1 else: 0
+      gDoneReply = c == 3
+      if c == 3 and gPetDoneAt != prevDoneAt:
+        gPetDoneAcked = false   # 新的一轮回复完成 → 重新需要提示
+      if c != 3:
+        gPetDoneAcked = false   # 离开 green 状态复位回执标记
+    # 基态色（非提问时颜色：打开=蓝 0 / 最小化=黑 1）——提问/完成闪烁与它交替
+    gPetBaseColor = if mainSeen and not gWindowMinimized: 0 else: 1
     var target = 0
     if gAsking:
       target = 2
+    elif gDoneReply and not gPetDoneAcked:
+      target = 3
     elif mainSeen and not gWindowMinimized:
+      target = 0
+    else:
       target = 1
     if target != gPetColor:
       gPetColor = target
       gPetBlinkOn = true
       floatPaint(gFloatHwnd)
-      # 托盘 + 任务栏图标跟随宠物颜色（蓝/黑/橙同色；含旧句柄释放）
+      # 托盘 + 任务栏图标跟随宠物颜色（蓝/黑/橙/绿同色；含旧句柄释放）
       applyPetIconColor()
       dbg("pet color -> " & $target)
-    if gPetColor == 2:
+    if gPetColor == 2 or gPetColor == 3:
       if petTick - gPetBlinkTick >= 400:
         gPetBlinkTick = petTick
         gPetBlinkOn = not gPetBlinkOn
         floatPaint(gFloatHwnd)
-        # 托盘/任务栏与宠物同相位交替闪烁（橙 ↔ 基态色）
+        # 托盘/任务栏与宠物同相位交替闪烁（橙/绿 ↔ 基态色）
         applyPetIconColor()
+        # 绿色闪烁中：主把窗口提到最前 → 回执并停闪（2026-08-21 主需求）
+        if gPetColor == 3 and not gPetDoneAcked:
+          let fg = GetForegroundWindow()
+          let mw = findMainWindow()
+          if fg != 0 and mw != 0 and fg == mw:
+            gPetDoneAcked = true
+            writePetAck()
+            gPetColor = gPetBaseColor
+            gPetBlinkOn = true
+            floatPaint(gFloatHwnd)
+            applyPetIconColor()
+            dbg("pet green acked (window foreground)")
 
     sleep(FLOAT_ANIM_MS)
