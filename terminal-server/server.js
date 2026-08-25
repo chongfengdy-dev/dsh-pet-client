@@ -278,7 +278,9 @@ app.get('/api/balance', (req, res) => {
 //    恢复真实逻辑：DEMO_MODE 改 false，/api/dsh-version 走 30min 缓存 npm 查询，/api/dsh-update 走真实 npm install。
 const DEMO_MODE = false;  // 已恢复真实逻辑（2026-08-19 主验收演示后关闭）
 let dshVerCache = { at: 0, data: null };
-const DSH_LOCAL_PKG = '/home/dream/.npm-global/lib/node_modules/@deepseek-ai/dsh/package.json';
+// 动态取用户 home，不硬编码用户名（2026-08-25 主要求：发布代码不含个人电脑名）
+const DSH_HOME = os.homedir();
+const DSH_LOCAL_PKG = DSH_HOME + '/.npm-global/lib/node_modules/@deepseek-ai/dsh/package.json';
 // ⚠️ 用 fs 读版本而非 require()：require 有模块缓存，npm install 更新后进程内仍读到旧版本
 // （2026-08-20 bug：点更新后磁盘已是 0.1.1-rc.1 但页面一直显示 0.1.0-rc.7，根因即此）
 function readLocalDshVersion() {
@@ -286,7 +288,7 @@ function readLocalDshVersion() {
     return JSON.parse(fs.readFileSync(DSH_LOCAL_PKG, 'utf8')).version || null;
   } catch (e) {}
   try {
-    return require('child_process').execSync('/home/dream/.npm-global/bin/dsh --version', { timeout: 5000 }).toString().trim() || null;
+    return require('child_process').execSync(DSH_HOME + '/.npm-global/bin/dsh --version', { timeout: 5000 }).toString().trim() || null;
   } catch (e2) { return null; }
 }
 function refreshDshVersion() {
@@ -354,7 +356,7 @@ function autoRefreshPlatformToken() {
   platformTokenRefreshing = true;
   return new Promise((resolve) => {
     execFile('python3', [path.join(__dirname, 'fetch-platform-token.py'), '--write'],
-      { timeout: 15000, env: { ...process.env, PYTHONPATH: '/tmp/py-libs' } },
+      { timeout: 15000, env: { ...process.env } },
       (err, stdout) => {
         platformTokenRefreshing = false;
         if (!err) {

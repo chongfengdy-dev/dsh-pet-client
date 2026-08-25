@@ -19,7 +19,7 @@ DeepSeek Harness 的 Windows 桌面客户端——托盘 + 悬浮鲸鱼宠物 + 
 
 - 🖥️ **内嵌终端**：主窗口内直接打开 xterm 终端（非 iframe），直连 WSL 侧 3081 终端服务（真 PTY bash），支持自定义背景色 / 透明度 / 字号 / 字体，面板位置大小记忆
 - 📊 **Token HUD**：右上角常驻面板，实时显示当日 输入 / 输出 / 缓存命中率 / 余额（DeepSeek 官方接口）
-- 🐳 **三色悬浮鲸鱼宠物**：主窗口打开 = 黑色，最小化 = 蓝色，**需要你交互时（提问/审批）= 橙色心跳闪烁**（75bpm，托盘图标同步变色）
+- 🐳 **四色悬浮鲸鱼宠物**：主窗口打开 = 蓝色，最小化 = 黑色，**需要你交互时（提问/审批）= 橙色心跳闪烁**，**回复完成 = 绿色心跳闪烁**（窗口置前即停，托盘/任务栏图标同步变色）
 - 📑 **消息大纲（左缘横杠）**：当前会话我的消息侧边导航——hover 展开大纲，点击跳转定位（黄色闪烁），收起态显示激活消息视口 10 条窗口
 - 🖱️ **鼠标手势**：右键上拖 = 滚到页顶，右键下拖 = 滚到底，先上后下 = 刷新页面（带轨迹与动作提示）
 - 🔍 **缩放浮标**：Ctrl+滚轮 / `+` / `-` / `0` 缩放页面，屏幕中央实时显示缩放百分比
@@ -71,7 +71,7 @@ DSH-Pet-Client/
 ├── dsh-wechat/            # 微信通道插件（iLink bot <-> agent + 3082 send 服务）
 ├── terminal-server/       # 3081 终端服务（node + node-pty + 词元/提问检测；backgrounds/ 终端背景图）
 ├── deploy.sh              # WSL 一键部署脚本
-├── assets/                # 鲸鱼素材（三色 bin/ico + 托盘图标）
+├── assets/                # 鲸鱼素材（四色 bin/ico + 托盘图标）
 └── README.md
 ```
 
@@ -126,7 +126,7 @@ nim c --app:gui -d:release --path:"<webui-nim路径>" --path:"<winim路径>" dsh
 
 | 版本 | 内容 |
 |---|---|
-| v2.1.3（当前）| 回复完成绿闪提示（提问后 dsh 干完活，悬浮鲸鱼/托盘/任务栏图标绿↔基态闪烁，主窗口置前即停）；基态色交换（打开=蓝、最小化=黑）；重启 dsh-web 后内嵌页面自动刷新（后端恢复检测 → navigate）；dsh-web.service 加 --no-open（不再自动弹系统浏览器）；Hub 平台 token 自动获取（读 CentBrowser localStorage 明文 LevelDB，token 失效自动恢复，无需手动 F12） |
+| v2.1.3（当前）| 回复完成绿闪提示（提问后 dsh 干完活，悬浮鲸鱼/托盘/任务栏图标绿↔基态闪烁，主窗口置前即停）；基态色交换（打开=蓝、最小化=黑）；重启 dsh-web 后内嵌页面自动刷新（后端恢复检测 → navigate）；dsh-web.service 加 --no-open（不再自动弹系统浏览器）；Hub 平台 token 自动获取（从浏览器本地存储读取，token 失效自动恢复，无需手动 F12） |
 | v2.1.2 | Bug 修复：①dsh 一键更新后仍显示旧版本（根因=server.js 用 require() 读 package.json 触发 Node 模块缓存，dsh-terminal 进程永远读到首次加载版本）→ 改 readLocalDshVersion() 用 fs.readFileSync+JSON.parse；②余额一直不显示（根因=.credentials.yaml 的 DEEPSEEK_API_KEY 在 refs: 嵌套下带缩进，正则 ^ 匹配不上）→ 改 ^\s*；余额刷新频率 2 分钟→30s（HUB 词元保持 10s 拉取/60s 聚合不变）；手动 sudo 重启 dsh-web 后前端轮询 /api/dsh-version 至 hasUpdate=false 且 3080 可访问时自动刷新页面（6 分钟超时） |
 | v2.1.1 | Token HUD 增强：余额<5 元红色警示、「花费」行高峰/空闲状态（DeepSeek 峰谷定价官方规则 9:00-12:00/14:00-18:00，UTC+8）；dsh 版本更新提示（右下角一键更新，自动升级 npm 包 + 打开终端预输入 sudo 重启）；终端面板毛玻璃对齐 Token HUD；消息大纲拆分为独立 npm 插件 dsh-message-outline（v0.1.1 已上架） |
 | v2.1.0 | 消息大纲独立插件（dsh-message-outline）、微信通道插件（dsh-wechat + 3082 send 服务）、微信会话归档隐藏；横杠大纲定稿（收起=视口 10 条窗口、行边界吸附）；README 整理 |

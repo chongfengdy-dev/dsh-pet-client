@@ -1,0 +1,14 @@
+plyvel-1.5.1.dist-info/INSTALLER,sha256=zuuue4knoyJ-UwPPXg8fezS7VCrXJQrAP7zeNuwvFQg,4
+plyvel-1.5.1.dist-info/LICENSE.rst,sha256=dVsbjBeoXSZo2IWCcH5WpWE5BkP7J7oMkm7mciCXb0A,1567
+plyvel-1.5.1.dist-info/METADATA,sha256=PNKyzTSNU_w6A8JVD1N11YKDyHe3meS9cJfDgUWnTBI,1689
+plyvel-1.5.1.dist-info/RECORD,,
+plyvel-1.5.1.dist-info/REQUESTED,sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU,0
+plyvel-1.5.1.dist-info/WHEEL,sha256=4ZiCdXIWMxJyEClivrQv1QAHZpQh8kVYU92_ZAVwaok,152
+plyvel-1.5.1.dist-info/top_level.txt,sha256=C6Ih_NMIyfUFXCY5FTNXqQvAXhGl2uyszVQ8INZNDis,7
+plyvel.libs/libleveldb-e43d8649.so.1.22.0,sha256=Oyxa-L-f4YDNMuQ7l0nvL8M-b8uc3-rn3VKqZE9Q1kA,528865
+plyvel.libs/libsnappy-2c75d721.so.1.1.9,sha256=4md-jLbQNIrgigMvpOcWND-psf05SjY-OTQ6j_KbjmI,180913
+plyvel/__init__.py,sha256=NkKZfruyDYTFC87h0vpCJiJh-aNeXROXzSWZF9qSa3c,339
+plyvel/__pycache__/__init__.cpython-312.pyc,,
+plyvel/__pycache__/_version.cpython-312.pyc,,
+plyvel/_plyvel.cpython-312-x86_64-linux-gnu.so,sha256=WkInBzPKLzHT3teyg7U6x8NphX3hxSjeUroBCPaIlTI,2455449
+plyvel/_version.py,sha256=jt8nLBBAPiVftmLVm3_iUy4vhkhIgeL0eox1kMiEdVk,190
