@@ -8,18 +8,34 @@
 # 注意：浏览器运行中 LevelDB 有写锁，需先拷贝目录再解析（plyvel 需排他锁）。
 import os, sys, json, shutil, tempfile
 
-PROFILE_LS = r"/mnt/c/Users/admin/AppData/Local/CentBrowser/User Data/Default/Local Storage/leveldb"
 OUT_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'platform-token.json')
 TARGET_KEY = '_https://platform.deepseek.com\x00\x01userToken'
 
+def find_profile_ls():
+    """动态定位 CentBrowser localStorage：枚举 /mnt/c/Users 下真实用户目录，
+    不硬编码用户名（2026-08-25 主要求：发布代码不含个人电脑名）。"""
+    users_root = '/mnt/c/Users'
+    try:
+        for name in sorted(os.listdir(users_root)):
+            if name.startswith('.') or name in ('Public', 'Default', 'Default User', 'All Users'):
+                continue
+            cand = os.path.join(users_root, name, 'AppData', 'Local', 'CentBrowser',
+                                'User Data', 'Default', 'Local Storage', 'leveldb')
+            if os.path.isdir(cand):
+                return cand
+    except OSError:
+        pass
+    return None
+
 def read_token():
-    if not os.path.isdir(PROFILE_LS):
-        return None, f"localStorage 目录不存在: {PROFILE_LS}"
+    profile = find_profile_ls()
+    if not os.path.isdir(profile):
+        return None, f"localStorage 目录不存在: {profile}"
     # 拷贝 leveldb 目录到临时位置（浏览器运行中 LOCK 被占，plyvel 需要排他锁）
     tmp = tempfile.mkdtemp(prefix='dsh-ls-')
     try:
-        for name in os.listdir(PROFILE_LS):
-            src = os.path.join(PROFILE_LS, name)
+        for name in os.listdir(profile):
+            src = os.path.join(profile, name)
             if os.path.isfile(src):
                 try:
                     shutil.copy2(src, os.path.join(tmp, name))
