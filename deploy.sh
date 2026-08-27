@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# DSH-Pet-Client v2.1.3 — WSL 一键部署
+# DSH-Pet-Client v2.1.4 — WSL 一键部署
 # 跑一遍 = 安装 + 配置 + systemd 服务自启 + 重启 WSL（之后 Windows 双击 exe 即用）
 # 用法：bash deploy.sh
 set -e
@@ -8,7 +8,7 @@ PKG_DIR="$(cd "$(dirname "$0")" && pwd)"
 USER_NAME="$(whoami)"
 
 echo "=============================================="
-echo " DSH-Pet-Client v2.1.3 WSL 部署"
+echo " DSH-Pet-Client v2.1.4 WSL 部署"
 echo " 包目录: $PKG_DIR"
 echo "=============================================="
 
