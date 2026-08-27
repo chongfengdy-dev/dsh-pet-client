@@ -21,7 +21,9 @@
       "platform": "web",
       "inject": [
         "@deepseek-ai/dsh-client-connection",
-        "sessions"
+        "sessions",
+        "workspaces",
+        "slots"
       ]
     }
   }

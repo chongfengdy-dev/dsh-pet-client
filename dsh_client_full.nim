@@ -5,6 +5,7 @@ from webui/bindings import minimize, set_close_handler_wv
 import winim
 import winim/inc/shellapi
 import strutils, os, math, random, net
+import std/typedthreads   # Nim 2.x：threads 模块改名 typedthreads（createThread/Thread）
 
 # winmm 高精度定时器（winim 未封装，手动声明；60fps 动画需要）
 proc timeBeginPeriod(uPeriod: uint32): uint32 {.stdcall, dynlib: "winmm.dll", importc.}
@@ -765,6 +766,66 @@ proc writePetAck() =
   except CatchableError:
     discard
 
+proc minimizeMainWindow() =
+  ## 最小化主窗口（等同点击窗口最小化按钮）。
+  ## 2026-08-26 主需求：页面 L 手势（下→右）触发；逻辑与托盘 toggle 的最小化分支一致。
+  let wnd = findMainWindow()
+  if wnd != 0:
+    gWindowMinimized = true
+    minimize(csize_t(gWindow))
+    # 兜底：若 webui API 未生效，再直接 ShowWindow
+    if IsIconic(wnd) != 1:
+      discard ShowWindow(wnd, SW_MINIMIZE)
+
+# ---- 手势最小化：目录监控事件驱动（2026-08-27 主需求，替代每帧文件轮询）----
+# ReadDirectoryChangesW（OS 级目录变化通知）监控 %USERPROFILE% 目录：
+# minimize-flag.json 出现/被改写 → 删除并置内存标志 gMinimizeRequested。
+# 主循环每帧只查内存布尔（零文件系统轮询、零延迟）。
+var gMinimizeRequested = false   # bool 跨线程读写（x86 原子、无 GC 引用，线程安全足够）
+var gMinimizeWatchStop = false
+
+proc wideToNarrow(pw: ptr WCHAR, len: int): string =
+  ## UTF-16 宽字符 → UTF-8（WideCharToMultiByte，监控文件名解析用）
+  if len <= 0: return ""
+  let needed = WideCharToMultiByte(CP_UTF8, 0, pw, int32(len), nil, 0, nil, nil)
+  if needed <= 0: return ""
+  result = newString(needed)
+  discard WideCharToMultiByte(CP_UTF8, 0, pw, int32(len), result.cstring, needed, nil, nil)
+
+proc watchMinimizeThread() {.thread.} =
+  ## 监控 Windows 用户目录（事件驱动）：minimize-flag.json 出现即消费。
+  ## 同时监控文件创建与内容改写（写覆盖场景），匹配文件名即处理，幂等安全。
+  let dir = getEnv("USERPROFILE")
+  let hDir = CreateFileW(newWideCString(dir), FILE_LIST_DIRECTORY,
+                         FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE,
+                         nil, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0)
+  if hDir == INVALID_HANDLE_VALUE:
+    dbg("minimize watch: open dir failed")
+    return
+  var buf: array[64 * 1024, byte]
+  while not gMinimizeWatchStop:
+    var bytesReturned: DWORD
+    if ReadDirectoryChangesW(hDir, addr buf[0], DWORD(buf.len), 0,
+                             FILE_NOTIFY_CHANGE_FILE_NAME or FILE_NOTIFY_CHANGE_LAST_WRITE,
+                             addr bytesReturned, nil, nil) == 0:
+      dbg("minimize watch: ReadDirectoryChangesW failed")
+      break
+    var p = cast[PFILE_NOTIFY_INFORMATION](addr buf[0])
+    var guard = 0
+    while true:
+      guard.inc
+      if guard > 64: break
+      let nameChars = int(p.FileNameLength) div 2
+      var fname = ""
+      if nameChars > 0:
+        fname = wideToNarrow(addr p.FileName[0], nameChars)
+      if fname == "minimize-flag.json":
+        try: removeFile(dir & "\\minimize-flag.json") except CatchableError: discard
+        gMinimizeRequested = true
+      if p.NextEntryOffset == 0: break
+      p = cast[PFILE_NOTIFY_INFORMATION](cast[int](p) + int(p.NextEntryOffset))
+  CloseHandle(hDir)
+
 # ---------- 主流程 ----------
 
 when isMainModule:
@@ -806,6 +867,11 @@ when isMainModule:
   dbg("before floatInit")
   floatInit()
   dbg("after floatInit")
+
+  # 手势最小化监控线程（事件驱动，2026-08-27 主需求）
+  var watchThread: Thread[void]
+  createThread(watchThread, watchMinimizeThread)
+  dbg("minimize watch thread started")
 
   # 设置窗口鲸鱼图标
   sleep(2000)
@@ -926,6 +992,10 @@ when isMainModule:
         gPetDoneAcked = false   # 新的一轮回复完成 → 重新需要提示
       if c != 3:
         gPetDoneAcked = false   # 离开 green 状态复位回执标记
+    # ---- L 手势最小化：事件驱动（监控线程置内存标志，零文件轮询、零延迟）----
+    if gMinimizeRequested:
+      gMinimizeRequested = false
+      minimizeMainWindow()
     # 基态色（非提问时颜色：打开=蓝 0 / 最小化=黑 1）——提问/完成闪烁与它交替
     gPetBaseColor = if mainSeen and not gWindowMinimized: 0 else: 1
     var target = 0
@@ -947,11 +1017,18 @@ when isMainModule:
     if gPetColor == 2 or gPetColor == 3:
       if petTick - gPetBlinkTick >= 400:
         gPetBlinkTick = petTick
-        gPetBlinkOn = not gPetBlinkOn
-        floatPaint(gFloatHwnd)
-        # 托盘/任务栏与宠物同相位交替闪烁（橙/绿 ↔ 基态色）
-        applyPetIconColor()
-        # 绿色闪烁中：主把窗口提到最前 → 回执并停闪（2026-08-21 主需求）
+        # 2026-08-27 主需求：回复完成绿色常亮不闪烁（原橙/绿同法闪烁）
+        # 仅提问橙色保留心跳闪烁；绿色固定画 target 色（gPetBlinkOn 恒 true）
+        if gPetColor == 2:
+          gPetBlinkOn = not gPetBlinkOn
+          floatPaint(gFloatHwnd)
+          # 托盘/任务栏与宠物同相位交替闪烁（橙 ↔ 基态色）
+          applyPetIconColor()
+        elif not gPetBlinkOn:
+          gPetBlinkOn = true
+          floatPaint(gFloatHwnd)
+          applyPetIconColor()
+        # 绿色常亮中：主把窗口提到最前 → 回执并停绿（2026-08-21 主需求保留）
         if gPetColor == 3 and not gPetDoneAcked:
           let fg = GetForegroundWindow()
           let mw = findMainWindow()

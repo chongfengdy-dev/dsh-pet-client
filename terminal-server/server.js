@@ -150,6 +150,105 @@ app.post('/api/pet-state', (req, res) => {
   writePetStateFile();
   res.json(petState);
 });
+// ---------- 会话删除 / 恢复（已归档会话管理，2026-08-27 主需求） ----------
+// dsh 核心无删除/取消归档 API：
+//  - 删除：删文件 ~/.dsh/sessions/<工作区>/session-<uuid>/，fs.watch 自动刷新列表
+//  - 恢复：从 ~/.dsh/storages/workspace.json 移除 archivedSessionIds 标记 + 重启 dsh web
+//    （host 内存态不同步，必须重启让 host 重载；web 有 Restart=always 自动拉起）
+// 安全：sessionId 带 "session-" 前缀；标准 uuid 或自定义（微信 session-wechat-xxx），
+// 仅允许安全字符（防路径穿越），路径限定 sessions 根内。
+const SESSIONS_ROOT = path.join(os.homedir(), '.dsh', 'sessions');
+const WORKSPACE_STATE_FILE = path.join(os.homedir(), '.dsh', 'storages', 'workspace.json');
+const SESSION_ID_RE = /^session-[a-zA-Z0-9_-]{1,64}$/;
+function normalizeSessionId(sessionId) {
+  if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) return null;
+  return sessionId;
+}
+function findSessionDir(fullId) {
+  let entries = [];
+  try { entries = fs.readdirSync(SESSIONS_ROOT, { withFileTypes: true }); } catch (e) { return null; }
+  for (const ws of entries) {
+    if (!ws.isDirectory()) continue;
+    const target = path.join(SESSIONS_ROOT, ws.name, fullId);
+    try {
+      if (fs.statSync(target).isDirectory()) return target;
+    } catch (e) { /* 继续找 */ }
+  }
+  return null;
+}
+app.post('/api/session-delete', (req, res) => {
+  const fullId = normalizeSessionId(req.body && req.body.sessionId);
+  if (!fullId) return res.status(400).json({ error: 'invalid session id' });
+  const target = findSessionDir(fullId);
+  if (!target) return res.status(404).json({ error: 'session not found' });
+  const rootReal = path.resolve(SESSIONS_ROOT);
+  const targetReal = path.resolve(target);
+  if (!targetReal.startsWith(rootReal + path.sep)) {
+    return res.status(403).json({ error: 'path outside sessions root' });
+  }
+  fs.rmSync(targetReal, { recursive: true, force: true });
+  console.log('[session-delete] removed', targetReal);
+  // 同步清理归档集合残留（host 重启后加载干净状态；2026-08-27）
+  try {
+    const raw = fs.readFileSync(WORKSPACE_STATE_FILE, 'utf8');
+    const state = JSON.parse(raw);
+    const arr = state.global && state.global.archivedSessionIds;
+    if (Array.isArray(arr) && arr.includes(fullId)) {
+      state.global.archivedSessionIds = arr.filter((id) => id !== fullId);
+      const tmp = WORKSPACE_STATE_FILE + '.tmp';
+      fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
+      fs.renameSync(tmp, WORKSPACE_STATE_FILE);
+      console.log('[session-delete] archive-set cleaned', fullId);
+    }
+  } catch (e) { console.log('[session-delete] archive-set cleanup failed:', e.message); }
+  res.json({ ok: true });
+});
+app.post('/api/session-unarchive', (req, res) => {
+  const fullId = normalizeSessionId(req.body && req.body.sessionId);
+  if (!fullId) return res.status(400).json({ error: 'invalid session id' });
+  try {
+    const raw = fs.readFileSync(WORKSPACE_STATE_FILE, 'utf8');
+    const state = JSON.parse(raw);
+    const arr = state.global && state.global.archivedSessionIds;
+    if (!Array.isArray(arr)) return res.status(404).json({ error: 'no archive set' });
+    if (!arr.includes(fullId)) return res.status(404).json({ error: 'session not archived' });
+    state.global.archivedSessionIds = arr.filter((id) => id !== fullId);
+    // 原子写：临时文件 + rename（避免半写）
+    const tmp = WORKSPACE_STATE_FILE + '.tmp';
+    fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
+    fs.renameSync(tmp, WORKSPACE_STATE_FILE);
+    console.log('[session-unarchive] restored', fullId);
+    // 重启 dsh web（Restart=always，systemd 自动拉起）让 host 重载归档状态
+    try {
+      const cp = require('child_process');
+      const out = cp.execSync("ps -eo pid,args | grep 'dsh web' | grep -v grep | awk '{print $1}'", { encoding: 'utf8' });
+      const pid = String(out).trim().split('\n')[0];
+      if (pid) {
+        process.kill(Number(pid), 'SIGTERM');
+        console.log('[session-unarchive] dsh web restart triggered pid=' + pid);
+      }
+    } catch (e) {
+      console.log('[session-unarchive] web restart failed:', e.message);
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
+// ---------- 鼠标手势最小化标记（一次性） ----------
+// 2026-08-26 主需求：页面右键 L 手势（下→右）→ 最小化客户端窗口。
+// 不走 pet-state（ask-pending 状态机会覆盖它，1s 轮询可能错过），
+// 独立写一次性标记文件，Nim 端读到即消费（执行最小化 + 删除文件）。
+const MINIMIZE_FLAG_FILE = (winUserHome() || '/mnt/c/Users/') + 'minimize-flag.json';
+app.post('/api/minimize', (req, res) => {
+  console.log('[minimize] gesture triggered at', new Date().toISOString());
+  try {
+    fs.writeFileSync(MINIMIZE_FLAG_FILE, JSON.stringify({ at: Date.now() }), 'utf8');
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+});
 // ---------- 横杠大纲历史持久化（服务端文件，跨重启保留） ----------
 // 主 2026-08-17 定稿：横杠记录要"关机也能找回来"，走服务端文件（localStorage 在
 // WebView2 缓存目录下不可靠）。按会话 ID 存 [{text}] 列表；插件启动读、来一条写一条。

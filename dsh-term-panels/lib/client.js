@@ -3,6 +3,9 @@ window.__ModuleLoader__.load({
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
+		// React（设置页 section 正规注册用；dsh ModuleLoader 解析，同 dshmarket 方案；try-catch 保护）
+		let React = null;
+		try { React = require("react"); } catch (e) {}
 
 		// ============================================================
 		// DSH 前端插件：终端悬浮面板 + Token 常驻 HUD
@@ -17,6 +20,7 @@ window.__ModuleLoader__.load({
 		const XTERM_JS = "http://127.0.0.1:3081/vendor/xterm/xterm.js";
 		const XTERM_FIT_JS = "http://127.0.0.1:3081/vendor/fit/addon-fit.js";
 		const BALANCE_URL = "http://127.0.0.1:3081/api/balance";
+		const MINIMIZE_URL = "http://127.0.0.1:3081/api/minimize";   // L 手势（下→右）最小化客户端
 		const DOCK_ID = "dsh-panels-dock";
 		const TERM_PANEL_ID = "dsh-term-panel";
 		const TERM_HOST_ID = "dsh-term-host";
@@ -32,6 +36,48 @@ window.__ModuleLoader__.load({
 			{ name: "宋体", value: "SimSun, monospace" },
 			{ name: "微软雅黑", value: '"Microsoft YaHei", monospace' },
 		];
+		// 界面字体选项（覆盖 dsh 的 --dsw-font-family；2026-08-27 主需求：字型选择）
+		const UI_FONT_OPTIONS = [
+			{ name: "系统默认", value: "" },
+			{ name: "微软雅黑", value: '"Microsoft YaHei", "微软雅黑", sans-serif' },
+			{ name: "宋体", value: '"SimSun", "宋体", serif' },
+			{ name: "黑体", value: '"SimHei", "黑体", sans-serif' },
+			{ name: "楷体", value: '"KaiTi", "楷体", serif' },
+			{ name: "霞鹜文楷", value: '"LXGW WenKai", "霞鹜文楷", "KaiTi", serif' },
+			{ name: "苹方", value: '"PingFang SC", "苹方", sans-serif' },
+			{ name: "思源黑体", value: '"Noto Sans CJK SC", "Source Han Sans SC", sans-serif' },
+			{ name: "Consolas", value: '"Consolas", monospace' },
+			{ name: "Cascadia Mono", value: '"Cascadia Mono", monospace' },
+			{ name: "JetBrains Mono", value: '"JetBrains Mono", Consolas, monospace' },
+		];
+		const UI_FONT_KEY = "dsh-ui-font";
+		const UI_FONT_SIZE_KEY = "dsh-ui-font-size";   // 界面字号（基准 14）
+		// 界面字体应用（注入 CSS 覆盖字体变量；空值恢复系统默认）
+		function applyUiFont(value) {
+			let st = document.getElementById("dsh-ui-font-style");
+			if (!st) {
+				st = document.createElement("style");
+				st.id = "dsh-ui-font-style";
+				document.head.appendChild(st);
+			}
+			st.textContent = value
+				? ":root{--dsw-font-family:" + value + " !important;--ds-font-family-code:" + value + " !important}body{font-family:" + value + " !important}"
+				: "";
+		}
+		// 界面字号应用（缩放比例 = 字号/基准14；2026-08-27 主需求）
+		function applyUiFontSize(size) {
+			const z = size > 0 ? (size / 14) : 1;
+			document.documentElement.style.zoom = String(Math.round(z * 1000) / 1000);
+		}
+		// 读取并应用持久化界面字体/字号（启动时调用）
+		function initUiFont() {
+			try {
+				const savedFont = localStorage.getItem(UI_FONT_KEY);
+				if (savedFont) applyUiFont(savedFont);
+				const savedSize = parseInt(localStorage.getItem(UI_FONT_SIZE_KEY) || "", 10);
+				if (savedSize > 0) applyUiFontSize(savedSize);
+			} catch (e) {}
+		}
 
 		// 终端宿主/状态提升到模块顶层（2026-08-19：版本更新提示的 typeSudoRestart 在 apply 外需访问）
 		const termHost = document.createElement("div");
@@ -97,6 +143,89 @@ window.__ModuleLoader__.load({
 					termSettingsPanel.style.display === "none" ? "block" : "none";
 			});
 			termPanel.root.appendChild(settingsBtn);
+			// ---------- 界面字体（系统字库枚举 + 选择即应用；2026-08-27 主需求：放入设置面板） ----------
+			let uiFont = "";
+			try { uiFont = localStorage.getItem(UI_FONT_KEY) || ""; } catch (e) {}
+			let uiFontSize = 14;   // 界面字号（基准 14；2026-08-27 主需求，滑杆调整）
+			try { const s = parseInt(localStorage.getItem(UI_FONT_SIZE_KEY) || "", 10); if (s > 0) uiFontSize = s; } catch (e) {}
+			let sysFonts = null;   // 系统字体列表（懒加载缓存）
+			async function loadSystemFonts() {
+				if (sysFonts) return sysFonts;
+				const names = [];
+				try {
+					if (window.queryLocalFonts) {
+						const fonts = await window.queryLocalFonts();
+						const seen = new Set();
+						for (const f of fonts) {
+							const family = (f.family || "").trim();
+							if (family && !seen.has(family)) { seen.add(family); names.push(family); }
+						}
+					}
+				} catch (e) { /* 权限拒绝/不支持 → 回退候选项 */ }
+				if (names.length === 0) {
+					for (const o of UI_FONT_OPTIONS) if (o.value) names.push(o.name);
+				}
+				names.sort((a, b) => a.localeCompare(b, "zh"));
+				sysFonts = names;
+				return names;
+			}
+			function pickFont(value) {
+				uiFont = value;
+				try { localStorage.setItem(UI_FONT_KEY, uiFont); } catch (err) {}
+				applyUiFont(uiFont);
+			}
+			// ---------- 设置页"界面字体" section（React 正规注册，同 dshmarket 方案；2026-08-27 主需求） ----------
+			function buildSettingsFontEntry() {
+				if (!React || !ctx.slots) return;
+				try {
+					// 字体设置 React 组件（闭包共享 applyUiFont/applyUiFontSize/loadSystemFonts）
+					function FontSection() {
+						const [font, setFont] = React.useState(uiFont);
+						const [size, setSize] = React.useState(uiFontSize);
+						const [fonts, setFonts] = React.useState([]);
+						React.useEffect(() => { loadSystemFonts().then((f) => setFonts(f)); }, []);
+						const sel = React.createElement("select", {
+							value: font,
+							onChange: (e) => { const v = e.target.value; setFont(v); pickFont(v); },
+							style: { width: "100%", padding: "7px 10px", borderRadius: "8px",
+								border: "1px solid var(--dsw-alias-border-l2)",
+								background: "var(--dsw-alias-bg-layer-2)",
+								color: "var(--dsw-alias-label-primary)", fontSize: "14px" },
+						}, React.createElement("option", { value: "" }, "系统默认"),
+							fonts.map((f) => React.createElement("option",
+								{ value: '"' + f + '", sans-serif', style: { fontFamily: '"' + f + '"' } }, f)));
+						// 字号下拉（同字型 UI，2026-08-27 主需求：滑动条不好操作改下拉）
+						const SIZE_OPTS = [12, 13, 14, 15, 16, 17, 18, 19, 20];
+						const range = React.createElement("select", {
+							value: String(size),
+							onChange: (e) => { const v = parseInt(e.target.value, 10); setSize(v); applyUiFontSize(v);
+								try { localStorage.setItem(UI_FONT_SIZE_KEY, String(v)); } catch (err) {} },
+							style: { width: "100%", padding: "7px 10px", borderRadius: "8px",
+								border: "1px solid var(--dsw-alias-border-l2)",
+								background: "var(--dsw-alias-bg-layer-2)",
+								color: "var(--dsw-alias-label-primary)", fontSize: "14px" },
+						}, SIZE_OPTS.map((n) => React.createElement("option", { value: String(n) }, n + " px")));
+						const preview = React.createElement("div",
+							{ style: { margin: "1px 0 22px", fontFamily: font || "system-ui, 'Segoe UI', sans-serif", fontSize: size + "px" } },
+							size + ": The quick brown fox jumps over the lazy dog");
+						const label = (txt) => React.createElement("div",
+							{ style: { fontSize: "13px", color: "var(--dsw-alias-label-secondary)", marginBottom: "8px" } }, txt);
+						const fontGroup = React.createElement("div", { style: { marginBottom: "22px" } }, label("字体"), sel);
+						const sizeGroup = React.createElement("div", null, label("字号"), range);
+						return React.createElement("div", null, fontGroup, preview, sizeGroup);
+					}
+					ctx.slots.inject("settings.section", () => {
+						const off = ctx.slots.register({
+							name: "settings.section",
+							id: "dsh-ui-font",
+							order: 45,
+							label: () => "界面",
+						}, () => React.createElement(FontSection));
+						return off;
+					});
+				} catch (e) { /* section 注册失败静默（不崩） */ }
+			}
+			buildSettingsFontEntry();
 			// 设置浮层（面板右上方）
 			const termSettingsPanel = document.createElement("div");
 			termSettingsPanel.id = "dsh-term-settings-panel";
@@ -401,8 +530,14 @@ window.__ModuleLoader__.load({
 			// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时屏幕中央提示） ----------
 			buildZoomHud();
 
+			// ---------- 应用持久化界面字体（字型选择，2026-08-27） ----------
+			initUiFont();
+
 			// ---------- 鼠标手势（右键：上拖到顶/下拖到底/先上后下刷新） ----------
 			buildMouseGesture();
+
+			// ---------- 已归档会话面板（设置按钮上方） ----------
+			buildArchivedPanel(ctx);
 
 			// ---------- 点击外部收起面板（设置浮层算面板内部，不收起） ----------
 			document.addEventListener("click", (e) => {
@@ -929,6 +1064,28 @@ window.__ModuleLoader__.load({
 				}
 				return false;
 			}
+			// L 形手势（下→右，各段 ±30° 锥）：先向下累计 >= SEG_MIN（垂直 ±30° 内），
+			// 再向右累计 >= SEG_MIN（水平 ±30° 内）→ 最小化客户端（主 2026-08-26 定；08-27 实测 15° 太严改 30°）
+			function isLMinimizeGesture() {
+				const pts = pathPoints;
+				if (pts.length < 6) return false;
+				const TAN30 = Math.tan(Math.PI / 6);   // 30° 锥：|dx| <= |dy| * tan30
+				// 第一段：向下（屏幕正下方 30° 锥内）累计 >= SEG_MIN
+				let downEnd = -1;
+				for (let i = 1; i < pts.length; i++) {
+					const dy = pts[i][1] - pts[0][1];             // 向下为正
+					const dx = Math.abs(pts[i][0] - pts[0][0]);
+					if (dy >= SEG_MIN && dx <= dy * TAN30) { downEnd = i; break; }
+				}
+				if (downEnd < 0) return false;
+				// 第二段：向右（屏幕正右方 30° 锥内，dx 确实为正）累计 >= SEG_MIN
+				for (let j = downEnd + 1; j < pts.length; j++) {
+					const dx = pts[j][0] - pts[downEnd][0];       // 向右为正
+					const dy = Math.abs(pts[j][1] - pts[downEnd][1]);
+					if (dx >= SEG_MIN && dy <= dx * TAN30) return true;
+				}
+				return false;
+			}
 			// 总体方向：起点→终点的位移向量，判断是否在正上/正下 60° 锥内
 			// 返回 "up"（正上方锥内）| "down"（正下方锥内）| null（斜向/横向，不动作）
 			function overallDirection() {
@@ -950,7 +1107,11 @@ window.__ModuleLoader__.load({
 				showTrail(e.clientX, e.clientY);
 				if (active) {
 					const sc = findScrollable(e.target);
-					if (isRefreshGesture()) {
+					if (isLMinimizeGesture()) {
+						// L 形（下→右 ±15°）→ 最小化客户端（等同点击窗口最小化按钮）
+						showHint(e.clientX, e.clientY, "最小化");
+						fetch(MINIMIZE_URL, { method: "POST", mode: "cors" }).catch(() => {});
+					} else if (isRefreshGesture()) {
 						// 严格先上后下（60° 锥内）→ 刷新页面
 						showHint(e.clientX, e.clientY, "刷新");
 						location.reload();
@@ -974,6 +1135,448 @@ window.__ModuleLoader__.load({
 			document.addEventListener("contextmenu", (e) => {
 				if (moved || active) e.preventDefault();
 			});
+		}
+
+		// 大纲锁定计数：菜单/设置面板打开时禁止消息大纲 hover 展开，并整体隐藏横杠（2026-08-27 主需求）
+		function outlineLock(on) {
+			window.__dshOutlineLock = (window.__dshOutlineLock || 0) + (on ? 1 : -1);
+			if (window.__dshOutlineLock < 0) window.__dshOutlineLock = 0;
+			document.body.classList.toggle("dsh-outline-locked", window.__dshOutlineLock > 0);
+		}
+
+		// ---------- 已归档会话面板（侧边栏设置按钮上方，2026-08-27 主需求） ----------
+		// dsh 归档 = 会话加入 archivedSessionIds（从列表隐藏、无找回 UI 且无法删除）；
+		// 本面板订阅 workspaces.list（归档 id 集合）+ sessions.list（会话详情 byId），
+		// 在侧边栏 footArea 的 settingsArea 之前插入"已归档会话"区块：
+		// 展开/折叠、打开会话、删除会话（走 3081 /api/session-delete，删除后 dsh 的
+		// fs.watch 监听会话目录自动刷新列表）。MutationObserver 兜底 React 重渲染移出后重插。
+		function buildArchivedPanel(ctx) {
+			const sessions = ctx.sessions || (ctx.get ? ctx.get("sessions") : undefined);
+			const workspaces = ctx.workspaces || (ctx.get ? ctx.get("workspaces") : undefined);
+			if (!sessions || !workspaces) return;
+
+			const root = document.createElement("div");
+			root.id = "dsh-archived-panel";
+			Object.assign(root.style, {
+				borderTop: "1px solid var(--dsw-alias-border-l2)",
+				borderBottom: "1px solid var(--dsw-alias-border-l2)",   // 下方也加分隔线，与"设置"区分（2026-08-27 主需求）
+				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-1) 55%, transparent)",
+				color: "var(--dsw-alias-label-primary)",
+				fontFamily: "var(--dsw-font-family)",   // 跟随全局字体设置（2026-08-27 主需求）
+				fontSize: "14px", userSelect: "none",   // 对齐"设置"条目字号（2026-08-27 主需求）
+			});
+			// 标题行（点击折叠/展开）
+			const head = document.createElement("div");
+			Object.assign(head.style, {
+				display: "flex", alignItems: "center", gap: "6px",
+				padding: "7px 10px", cursor: "pointer",
+				color: "var(--dsw-alias-label-secondary)",
+				fontSize: "14px", fontWeight: "600",
+			});
+			const chevron = document.createElement("span");
+			chevron.textContent = "▸";
+			chevron.style.display = "inline-block";
+			const labelEl = document.createElement("span");
+			labelEl.textContent = "已归档会话";
+			const countEl = document.createElement("span");
+			Object.assign(countEl.style, {
+				marginLeft: "auto", fontSize: "12px",
+				background: "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-2))",
+				borderRadius: "8px", padding: "1px 7px",
+				color: "var(--dsw-alias-label-tertiary)",
+			});
+			head.appendChild(chevron);
+			head.appendChild(labelEl);
+			head.appendChild(countEl);
+			const listEl = document.createElement("div");
+			Object.assign(listEl.style, {
+				maxHeight: "220px", overflowY: "auto",
+				borderTop: "1px solid var(--dsw-alias-border-l2)",
+				display: "none",
+			});
+			let expanded = false;
+			// 本地已删除集合：删除成功后即时隐藏（不等 dsh host 文件监听推送，2026-08-27 主需求）
+			let removedIds = new Set();
+			head.addEventListener("click", () => {
+				expanded = !expanded;
+				chevron.textContent = expanded ? "▾" : "▸";
+				listEl.style.display = expanded ? "block" : "none";
+			});
+			root.appendChild(head);
+			root.appendChild(listEl);
+
+			function relTime(ts) {
+				if (!ts) return "";
+				const d = Date.now() - ts;
+				if (d < 60000) return "刚刚";
+				if (d < 3600000) return Math.floor(d / 60000) + " 分钟前";
+				if (d < 86400000) return Math.floor(d / 3600000) + " 小时前";
+				if (d < 7 * 86400000) return Math.floor(d / 86400000) + " 天前";
+				const dt = new Date(ts);
+				return (dt.getMonth() + 1) + "-" + dt.getDate();
+			}
+
+			function archivedList() {
+				let wsSnap = null, sSnap = null;
+				try { wsSnap = workspaces.list.getSnapshot(); } catch (e) {}
+				try { sSnap = sessions.list.getSnapshot(); } catch (e) {}
+				const archived = wsSnap && Array.isArray(wsSnap.archivedSessionIds) ? [...wsSnap.archivedSessionIds] : [];
+				const byId = sSnap && sSnap.byId ? sSnap.byId : {};
+				// 过滤已删除会话（byId 中已不存在 = 文件已删，host 已剔除；或本地即时移除标记）
+				const rows = archived.filter((id) => byId[id] !== undefined && !removedIds.has(id)).map((id) => {
+					const s = byId[id];
+					return { id, title: s.title || id.slice(0, 8), updatedAt: s.updatedAt || 0 };
+				});
+				rows.sort((a, b) => b.updatedAt - a.updatedAt);
+				return rows;
+			}
+
+			function render() {
+				const rows = archivedList();
+				countEl.textContent = String(rows.length);
+				listEl.textContent = "";
+				if (rows.length === 0) {
+					const empty = document.createElement("div");
+					empty.textContent = "无归档会话";
+					Object.assign(empty.style, { padding: "8px 12px", color: "var(--dsw-alias-label-tertiary)" });
+					listEl.appendChild(empty);
+					return;
+				}
+				for (const row of rows) {
+					const item = document.createElement("div");
+					Object.assign(item.style, {
+						display: "flex", alignItems: "center", gap: "6px",
+						height: "32px", padding: "0 8px", borderRadius: "8px",
+						cursor: "pointer", color: "var(--dsw-alias-label-primary)",
+					});
+					// hover：高亮背景 + 轻阴影（对齐原版会话行交互）
+					item.addEventListener("mouseenter", () => {
+						item.style.background = "var(--dsw-alias-interactive-bg-hover)";
+						item.style.boxShadow = "0 1px 3px rgba(0,0,0,.12)";
+					});
+					item.addEventListener("mouseleave", () => {
+						item.style.background = "transparent";
+						item.style.boxShadow = "none";
+						// 不移开即关菜单：鼠标移到菜单上时会误触行 mouseleave（2026-08-27 bug 修复）
+					});
+					const title = document.createElement("span");
+					title.textContent = row.title;
+					Object.assign(title.style, {
+						flex: "1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+					});
+					// 不设 title 属性：避免 hover 原生悬浮提示（2026-08-27 主需求）
+					const time = document.createElement("span");
+					time.textContent = relTime(row.updatedAt);
+					Object.assign(time.style, { fontSize: "12px", color: "var(--dsw-alias-label-tertiary)" });
+					// 三点按钮：hover 显示，点击弹出菜单（删除会话）；不设 title 避免悬浮提示（2026-08-27 主需求）
+					const moreBtn = document.createElement("button");
+					moreBtn.textContent = "⋯";
+					Object.assign(moreBtn.style, {
+						border: "none", background: "transparent", cursor: "pointer",
+						color: "var(--dsw-alias-label-tertiary)", fontSize: "15px",
+						lineHeight: "1", padding: "2px 4px", borderRadius: "5px",
+						visibility: "hidden",
+					});
+					item.addEventListener("mouseenter", () => { moreBtn.style.visibility = "visible"; });
+					item.addEventListener("mouseleave", () => { moreBtn.style.visibility = "hidden"; });
+					moreBtn.addEventListener("mouseenter", () => { moreBtn.style.color = "var(--dsw-alias-label-primary)"; });
+					moreBtn.addEventListener("mouseleave", () => { moreBtn.style.color = "var(--dsw-alias-label-tertiary)"; });
+					moreBtn.addEventListener("click", (e) => {
+						e.stopPropagation();
+						showRowMenu(row, moreBtn);
+					});
+					// 点击行 = 恢复归档会话并访问（dsh 限制：归档会话不可直接打开，
+					// 恢复 = 3081 从 workspace.json 移除归档标记 + 重启 web，刷新后回到列表）
+					item.addEventListener("click", () => {
+						showRestoreDialog(row);
+					});
+					item.appendChild(title);
+					item.appendChild(time);
+					item.appendChild(moreBtn);
+					listEl.appendChild(item);
+				}
+			}
+
+			// ---- 三点菜单（仿 dsh Menu 卡片风格）----
+			let rowMenuEl = null, rowMenuRow = null;
+			function hideRowMenu() {
+				if (rowMenuEl) {
+					outlineLock(false);   // 菜单关闭 → 解锁大纲
+					rowMenuEl.remove();
+					rowMenuEl = null;
+					rowMenuRow = null;
+				}
+			}
+			function showRowMenu(row, btn) {
+				if (rowMenuEl && rowMenuRow && rowMenuRow.id === row.id) { hideRowMenu(); return; }
+				hideRowMenu();
+				outlineLock(true);   // 菜单打开 → 锁大纲（划过大纲横杠不弹出）
+				rowMenuRow = row;
+				rowMenuEl = document.createElement("div");
+				Object.assign(rowMenuEl.style, {
+					position: "fixed", zIndex: "1100", minWidth: "164px", padding: "2px",
+					border: "1px solid var(--dsw-alias-border-inverted)",
+					borderRadius: "7px",
+					background: "var(--dsw-specific-menu, var(--dsw-alias-bg-layer-3))",
+					boxShadow: "var(--dsw-shadow-lv3, 0 8px 24px rgba(0,0,0,.35))",
+					fontFamily: 'system-ui, "Segoe UI", sans-serif',
+					fontSize: "14px", lineHeight: "22px",   // 对齐面板/设置字号（2026-08-27 主需求）
+				});
+				// 菜单项：恢复会话（普通色）+ 删除会话（danger 红）
+				const mkItem = (text, danger) => {
+					const it = document.createElement("div");
+					it.textContent = text;
+					Object.assign(it.style, {
+						display: "flex", alignItems: "center", gap: "6px",
+						minHeight: "34px", padding: "5px 8px", borderRadius: "5px",
+						cursor: "pointer",
+						color: danger ? "var(--dsw-alias-state-danger, #e5484d)" : "var(--dsw-alias-label-primary)",
+					});
+					it.addEventListener("mouseenter", () => {
+						it.style.background = danger
+							? "var(--dsw-alias-interactive-bg-hover-danger, var(--dsw-alias-interactive-bg-hover))"
+							: "var(--dsw-alias-interactive-bg-hover)";
+					});
+					it.addEventListener("mouseleave", () => { it.style.background = "transparent"; });
+					return it;
+				};
+				const restore = mkItem("恢复会话", false);
+				restore.addEventListener("click", (e) => {
+					e.stopPropagation();
+					hideRowMenu();
+					showRestoreDialog(row);
+				});
+				const del = mkItem("删除会话", true);
+				del.addEventListener("click", (e) => {
+					e.stopPropagation();
+					hideRowMenu();
+					showDeleteDialog(row);
+				});
+				rowMenuEl.appendChild(restore);
+				rowMenuEl.appendChild(del);
+				document.body.appendChild(rowMenuEl);
+				// 定位：按钮右下方（左缘对齐按钮左缘向下展开，对齐原版 Menu；空间不足向上弹）
+				const r = btn.getBoundingClientRect();
+				const mw = 164, mh = 34;
+				let left = r.left, top = r.bottom + 4;
+				if (top + mh > window.innerHeight - 8) top = r.top - mh - 4;
+				if (left + mw > window.innerWidth - 8) left = window.innerWidth - mw - 8;
+				if (left < 8) left = 8;
+				rowMenuEl.style.left = left + "px";
+				rowMenuEl.style.top = top + "px";
+				setTimeout(() => { document.addEventListener("click", hideRowMenu, { once: true }); }, 0);
+			}
+
+			// ---- 删除确认对话框（仿 dsh Modal 风格）----
+			function showDeleteDialog(row) {
+				const overlay = document.createElement("div");
+				Object.assign(overlay.style, {
+					position: "fixed", inset: "0", zIndex: "1200",
+					background: "rgba(0,0,0,.45)",
+					display: "flex", alignItems: "center", justifyContent: "center",
+				});
+				const card = document.createElement("div");
+				Object.assign(card.style, {
+					width: "360px", maxWidth: "90vw",
+					background: "var(--dsw-alias-bg-layer-2)",
+					border: "1px solid var(--dsw-alias-border-l2)",
+					borderRadius: "12px",
+					boxShadow: "var(--dsw-shadow-lv3, 0 16px 48px rgba(0,0,0,.4))",
+					padding: "18px",
+					color: "var(--dsw-alias-label-primary)",
+					fontFamily: 'system-ui, "Segoe UI", sans-serif',
+				});
+				const title = document.createElement("div");
+				title.textContent = "删除会话";
+				Object.assign(title.style, { fontSize: "15px", fontWeight: "600", marginBottom: "8px" });
+				const desc = document.createElement("div");
+				desc.textContent = "将永久删除会话「" + row.title + "」，包括全部对话记录，此操作不可恢复。";
+				Object.assign(desc.style, {
+					fontSize: "13px", lineHeight: "1.6",
+					color: "var(--dsw-alias-label-secondary)", marginBottom: "16px",
+				});
+				const btns = document.createElement("div");
+				Object.assign(btns.style, { display: "flex", justifyContent: "flex-end", gap: "8px" });
+				const mkBtn = (text, danger) => {
+					const b = document.createElement("button");
+					b.textContent = text;
+					Object.assign(b.style, {
+						padding: "6px 14px", borderRadius: "8px", cursor: "pointer",
+						border: "1px solid var(--dsw-alias-border-l2)",
+						background: danger ? "var(--dsw-alias-state-danger, #e5484d)" : "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))",
+						color: danger ? "#fff" : "var(--dsw-alias-label-primary)",
+						fontSize: "13px",
+					});
+					return b;
+				};
+				const close = () => overlay.remove();
+				const cancel = mkBtn("取消", false);
+				const confirmBtn = mkBtn("删除", true);
+				cancel.addEventListener("click", close);
+				confirmBtn.addEventListener("click", () => {
+					close();
+					fetch("http://127.0.0.1:3081/api/session-delete", {
+						method: "POST", mode: "cors",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ sessionId: row.id }),
+					}).then((r) => r.json()).then((j) => {
+						if (j.ok) {
+							// 本地即时移除（不等 host 推送），2026-08-27 主需求
+							removedIds.add(row.id);
+							render();
+						} else {
+							alert("删除失败：" + (j.error || "未知错误"));
+						}
+					}).catch(() => alert("删除失败：无法连接终端服务"));
+				});
+				overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+				btns.appendChild(cancel);
+				btns.appendChild(confirmBtn);
+				card.appendChild(title);
+				card.appendChild(desc);
+				card.appendChild(btns);
+				overlay.appendChild(card);
+				document.body.appendChild(overlay);
+			}
+
+			// ---- 恢复归档会话确认（dsh 无取消归档 API，走 3081 改 workspace.json + 重启 web）----
+			function showRestoreDialog(row) {
+				const overlay = document.createElement("div");
+				Object.assign(overlay.style, {
+					position: "fixed", inset: "0", zIndex: "1200",
+					background: "rgba(0,0,0,.45)",
+					display: "flex", alignItems: "center", justifyContent: "center",
+				});
+				const card = document.createElement("div");
+				Object.assign(card.style, {
+					width: "360px", maxWidth: "90vw",
+					background: "var(--dsw-alias-bg-layer-2)",
+					border: "1px solid var(--dsw-alias-border-l2)",
+					borderRadius: "12px",
+					boxShadow: "var(--dsw-shadow-lv3, 0 16px 48px rgba(0,0,0,.4))",
+					padding: "18px",
+					color: "var(--dsw-alias-label-primary)",
+					fontFamily: 'system-ui, "Segoe UI", sans-serif',
+				});
+				const title = document.createElement("div");
+				title.textContent = "恢复会话";
+				Object.assign(title.style, { fontSize: "15px", fontWeight: "600", marginBottom: "8px" });
+				const desc = document.createElement("div");
+				desc.textContent = "会话「" + row.title + "」已归档，恢复后才能访问。\n恢复后页面将自动刷新，会话回到会话列表。";
+				Object.assign(desc.style, {
+					fontSize: "13px", lineHeight: "1.6",
+					color: "var(--dsw-alias-label-secondary)", marginBottom: "16px",
+				});
+				const btns = document.createElement("div");
+				Object.assign(btns.style, { display: "flex", justifyContent: "flex-end", gap: "8px" });
+				const mkBtn = (text, primary) => {
+					const b = document.createElement("button");
+					b.textContent = text;
+					Object.assign(b.style, {
+						padding: "6px 14px", borderRadius: "8px", cursor: "pointer",
+						border: "1px solid var(--dsw-alias-border-l2)",
+						background: primary ? "var(--dsw-alias-state-business-primary, #4d6bfe)" : "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))",
+						color: primary ? "#fff" : "var(--dsw-alias-label-primary)",
+						fontSize: "13px",
+					});
+					return b;
+				};
+				const close = () => overlay.remove();
+				const cancel = mkBtn("取消", false);
+				const confirmBtn = mkBtn("恢复", true);
+				cancel.addEventListener("click", close);
+				confirmBtn.addEventListener("click", () => {
+					confirmBtn.disabled = true;
+					confirmBtn.textContent = "恢复中…";
+					fetch("http://127.0.0.1:3081/api/session-unarchive", {
+						method: "POST", mode: "cors",
+						headers: { "Content-Type": "application/json" },
+						body: JSON.stringify({ sessionId: row.id }),
+					}).then((r) => r.json()).then((j) => {
+						if (j.ok) {
+							close();
+							const tip = document.createElement("div");
+							Object.assign(tip.style, {
+								position: "fixed", top: "20px", left: "50%", transform: "translateX(-50%)",
+								zIndex: "1300", padding: "8px 16px", borderRadius: "8px",
+								background: "var(--dsw-alias-bg-layer-2)",
+								border: "1px solid var(--dsw-alias-border-l2)",
+								boxShadow: "0 4px 16px rgba(0,0,0,.3)",
+								color: "var(--dsw-alias-label-primary)", fontSize: "13px",
+								fontFamily: 'system-ui, "Segoe UI", sans-serif',
+							});
+							tip.textContent = "已恢复，页面即将刷新…";
+							document.body.appendChild(tip);
+						} else {
+							alert("恢复失败：" + (j.error || "未知错误"));
+							close();
+						}
+					}).catch(() => {
+						alert("恢复失败：无法连接终端服务");
+						close();
+					});
+				});
+				overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+				btns.appendChild(cancel);
+				btns.appendChild(confirmBtn);
+				card.appendChild(title);
+				card.appendChild(desc);
+				card.appendChild(btns);
+				overlay.appendChild(card);
+				document.body.appendChild(overlay);
+			}
+			render();
+			// 订阅归档集合与会话数据变化
+			try { if (sessions.list && sessions.list.subscribe) sessions.list.subscribe(render); } catch (e) {}
+			try { if (workspaces.list && workspaces.list.subscribe) workspaces.list.subscribe(render); } catch (e) {}
+
+			// 挂载：插到设置按钮上方（footArea 内 settingsArea 之前）
+			function findSettingsBtn() {
+				const btns = document.querySelectorAll("button");
+				for (const b of btns) {
+					const aria = (b.getAttribute("aria-label") || "").trim();
+					const txt = (b.textContent || "").trim();
+					const title = (b.getAttribute("title") || "").trim();
+					if (aria === "设置" || aria === "Settings" || txt === "设置" || txt === "Settings" || title === "设置" || title === "Settings") return b;
+				}
+				return null;
+			}
+			function mount() {
+				if (root.isConnected) return true;
+				const btn = findSettingsBtn();
+				if (!btn) return false;
+				const settingsArea = btn.closest("div");
+				const footArea = settingsArea ? settingsArea.parentElement : null;
+				if (!footArea) return false;
+				footArea.insertBefore(root, settingsArea);
+				// 侧边栏折叠成 rail（窄条）时隐藏区块
+				const sidebarRoot = footArea.parentElement;
+				const applyWidth = () => {
+					root.style.display = (sidebarRoot && sidebarRoot.offsetWidth > 80) ? "" : "none";
+				};
+				applyWidth();
+				if (sidebarRoot) { try { new ResizeObserver(applyWidth).observe(sidebarRoot); } catch (e) {} }
+				return true;
+			}
+			// 兜底：React 重渲染可能移除区块，观察并重插
+			try {
+				const mo = new MutationObserver(() => { if (!root.isConnected) mount(); });
+				mo.observe(document.body, { childList: true, subtree: true });
+			} catch (e) {}
+			// 等待侧边栏渲染完成后挂载（重试 9 秒）
+			let tries = 0;
+			const timer = setInterval(() => {
+				tries += 1;
+				if (mount() || tries > 30) clearInterval(timer);
+			}, 300);
+
+			// 设置面板打开时锁大纲（dsh 设置菜单在左侧弹出，鼠标划过大纲横杠会误展开遮挡；2026-08-27 主需求）
+			let settingsWasOpen = false;
+			setInterval(() => {
+				const isOpen = !!document.querySelector('[role="dialog"][aria-modal="true"], [role="dialog"][aria-hidden="false"], [role="dialog"]');
+				if (isOpen && !settingsWasOpen) { settingsWasOpen = true; outlineLock(true); }
+				else if (!isOpen && settingsWasOpen) { settingsWasOpen = false; outlineLock(false); }
+			}, 500);
 		}
 
 		// ---------- Token HUD（常驻右上角） ----------
@@ -1159,7 +1762,7 @@ window.__ModuleLoader__.load({
 			box.id = OUTLINE_RAIL_ID;
 			Object.assign(box.style, {
 				position: "fixed", left: "0", top: "50%",
-				transform: "translateY(-50%)", zIndex: "99989",
+				transform: "translateY(-50%)", zIndex: "1000",   // 2026-08-27：降到菜单(1100)/对话框(1200)之下，菜单可覆盖大纲
 				display: "flex", flexDirection: "column", gap: "0",
 				padding: "6px", borderRadius: "10px",
 				background: "transparent", border: "1px solid transparent",
@@ -1453,7 +2056,11 @@ window.__ModuleLoader__.load({
 					});
 				}
 			}
-			box.addEventListener("mouseover", () => updateExpanded(true));
+			box.addEventListener("mouseover", () => {
+				// 菜单/设置面板打开时锁大纲，避免划过大纲横杠弹出遮挡操作（2026-08-27 主需求）
+				if (window.__dshOutlineLock) return;
+				updateExpanded(true);
+			});
 			box.addEventListener("mouseout", (e) => {
 				if (!box.contains(e.relatedTarget)) updateExpanded(false);
 			});
@@ -1523,7 +2130,8 @@ window.__ModuleLoader__.load({
 				try { sessions.list.subscribe(() => rebind()); } catch (e) {}
 			}
 			rebind();
-			placeOutline();
+			// 等对话区渲染后定位 + 建立尺寸跟踪（2026-08-27 主需求：新客户端即时显示、侧边栏宽度变化跟随）
+			ensureOutlineTracking();
 			ensureRowObserver();
 			rebuildRowMap();
 			// ---- 视口跟随：对话区滚动时同步 activeIdx（事件驱动+节流，非轮询；
@@ -1562,13 +2170,53 @@ window.__ModuleLoader__.load({
 				}
 			}
 			window.addEventListener("resize", placeOutline);
+			// 侧边栏宽度/布局变化 → 对话区尺寸变化 → 重定位横杠；对话区出现前用 MO 等待（2026-08-27 主需求）
+			let outlineTracking = false;
+			function ensureOutlineTracking() {
+				const root = findChatRoot();
+				if (!root) return false;
+				if (!outlineTracking) {
+					outlineTracking = true;
+					try {
+						const ro = new ResizeObserver(() => placeOutline());
+						ro.observe(root);
+						// 事件驱动：观察侧边栏根（宽度变化必然触发 RO → 重定位横杠）
+						const sb = findSidebarRoot();
+						if (sb) ro.observe(sb);
+					} catch (e) {}
+				}
+				placeOutline();
+				return true;
+			}
+			// 侧边栏根元素（含设置按钮，向上取 footArea.parentElement）
+			function findSidebarRoot() {
+				const btns = document.querySelectorAll("button");
+				for (const b of btns) {
+					const aria = (b.getAttribute("aria-label") || "").trim();
+					const txt = (b.textContent || "").trim();
+					if (aria === "设置" || aria === "Settings" || txt === "设置" || txt === "Settings") {
+						const settingsArea = b.closest("div");
+						const footArea = settingsArea ? settingsArea.parentElement : null;
+						const root = footArea ? footArea.parentElement : null;
+						if (root) return root;
+					}
+				}
+				return null;
+			}
+			// MutationObserver 等待对话区出现后开始跟踪（也兜底对话区被重挂载）
+			try {
+				const trackMo = new MutationObserver(() => { ensureOutlineTracking(); });
+				trackMo.observe(document.body, { childList: true, subtree: true });
+			} catch (e) {}
 
 			// ---- 定位高亮动画样式 ----
 			if (!document.getElementById("dsh-msg-outline-style")) {
 				const st = document.createElement("style");
 				st.id = "dsh-msg-outline-style";
 				st.textContent = "." + OUTLINE_FLASH + "{animation:dshOutlineFlash 1.6s ease 1}"
-					+ "@keyframes dshOutlineFlash{0%,100%{background:transparent}15%,35%{background:rgba(255,200,0,.35)}}";
+					+ "@keyframes dshOutlineFlash{0%,100%{background:transparent}15%,35%{background:rgba(255,200,0,.35)}}"
+					// 菜单/设置面板打开（锁定态）时整体隐藏大纲横杠（2026-08-27 主需求）
+					+ "body.dsh-outline-locked #" + OUTLINE_RAIL_ID + "{display:none !important}";
 				document.head.appendChild(st);
 			}
 
@@ -1691,7 +2339,7 @@ window.__ModuleLoader__.load({
 			setTimeout(checkDshUpdate, 2500);
 
 exports.apply = apply;
-		exports.inject = ["connection", "sessions"];
+		exports.inject = ["connection", "sessions", "workspaces", "slots"];
 		return module.exports;
 	}
 });
