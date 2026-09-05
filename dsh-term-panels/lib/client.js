@@ -1638,29 +1638,37 @@ window.__ModuleLoader__.load({
 			// 列布局用 CSS grid（grid 容器已设 grid-template-columns: 1fr auto auto）
 			const row = (label, value, cost, valueColor, costColor) => {
 				const d = document.createElement("div");
+				// 2026-09-05 收窄 HUD 到 150：三列改两列（label 弹性截断 + 右侧 数值/金额 组合）
 				Object.assign(d.style, {
-					display: "grid",
-					gridTemplateColumns: "1fr auto auto",
-					columnGap: "6px",   // 2026-09-05 收窄 HUD 到 150 后压缩列距
-					alignItems: "baseline",
+					display: "flex", alignItems: "baseline", gap: "6px",
 				});
 				const l = document.createElement("span");
 				l.style.color = "var(--dsw-alias-label-tertiary)";
+				l.style.flex = "1";
+				l.style.minWidth = "0";
+				l.style.overflow = "hidden";
+				l.style.textOverflow = "ellipsis";
+				l.style.whiteSpace = "nowrap";
 				l.textContent = label;
+				const right = document.createElement("span");
+				right.style.display = "inline-flex";
+				right.style.alignItems = "baseline";
+				right.style.gap = "8px";
+				right.style.fontFamily = 'Consolas, monospace';
+				right.style.whiteSpace = "nowrap";
+				right.style.marginLeft = "auto";
 				const v = document.createElement("span");
-				v.style.fontFamily = 'Consolas, monospace';
 				v.style.color = valueColor || "var(--dsw-alias-label-primary)";
 				v.style.textAlign = "right";
 				v.textContent = value;
 				const c = document.createElement("span");
-				c.style.fontFamily = 'Consolas, monospace';
 				c.style.color = costColor || "var(--dsw-alias-label-primary)";
 				c.style.textAlign = "right";
-				c.style.minWidth = "38px";   // 2026-09-05 收窄适配
 				c.textContent = cost;
+				right.appendChild(v);
+				right.appendChild(c);
 				d.appendChild(l);
-				d.appendChild(v);
-				d.appendChild(c);
+				d.appendChild(right);
 				return d;
 			};
 			// 六项：输入(命中) / 输入(未命中) / 命中率 / 输出 / 今日消耗 / 余额（主定稿 2026-08-17）
