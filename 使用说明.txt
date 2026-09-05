@@ -16,11 +16,24 @@ npm install -g @deepseek-ai/dsh
 dsh --profile web
 ```
 
-看到类似 `dsh web: http://127.0.0.1:3080` 的输出即启动成功。
+看到类似 `dsh web: http://127.0.0.1:3080` 的输出即启动成功（新版 dsh 会打印**带 token 的完整 URL**，形如 `http://127.0.0.1:3080/?token=xxxx`）。
 **这个窗口不要关**（关了 web 就停了）。
+
+> 新版 dsh（0.1.2-rc.1 起）web 需要认证：浏览器首次访问需用上面打印的**完整 URL（含 token）**打开一次，之后 30 天内免认证。客户端认证方法见下方「认证引导」。
 
 ### 第 3 步：打开客户端
 双击本目录的 `dsh_client_full.exe`，等窗口出现即可使用。
+
+### 认证引导（首次/升级后必看）
+客户端内嵌页面与浏览器各自独立认证。若窗口停在
+`dsh web authentication required; reopen the URL printed by dsh web.`：
+
+1. 复制 dsh web 启动时打印的**完整 URL**（含 `?token=`，或只复制 `token=` 后面的串）；
+2. 在 exe 同目录新建文本文件 `dsh-web-token.txt`，把上面内容粘贴进去保存；
+3. 重新打开客户端（或等窗口重建），页面自动完成认证并正常加载。
+
+之后 30 天内免维护；期间 dsh web 重启也不影响（cookie 仍有效）。
+cookie 过期后重复以上步骤即可。
 
 ## 二、使用说明
 
@@ -37,6 +50,7 @@ dsh --profile web
 ## 三、常见问题
 
 - **客户端白屏/连不上**：确认第 2 步的 PowerShell 窗口还开着（dsh web 在 3080 端口运行）
+- **页面显示 authentication required**：按上面「认证引导」把带 token 的 URL 写入 `dsh-web-token.txt` 再重开客户端
 - **窗口标题不是 DeepSeek Harness**：属正常，客户端每 5 秒自动修正
 - **提示缺少 WebView2**：Win10/11 一般自带；没有的话装 https://developer.microsoft.com/microsoft-edge/webview2/
 - **端口被占用**：可用 `dsh --profile web --port 8080` 换端口，但客户端默认连 3080，换端口后客户端需改源码重新编译

@@ -20,6 +20,7 @@ proc dbg(msg: string) =
 
 const
   WebUrl = "http://127.0.0.1:3080"
+  WebTokenFile = "dsh-web-token.txt"   # 认证引导 token 文件（exe 同目录）
   AppId = "dsh_nim_client"
   FLOAT_ANIM_MS = 16        # 悬浮动画帧间隔（60fps 定稿；主实测 60fps 开宠物稳定——降频无关，
                             # 稳定关键是无窗口挂钩，见主循环注释）
@@ -28,6 +29,34 @@ const
   ID_TRAY_OPEN = 1
   ID_TRAY_EXIT = 3
   ID_TRAY_PET = 4          # 显示/隐藏宠物开关
+
+# ---- dsh web 认证引导（2026-09-05：dsh 0.1.2-rc.1 起 web 需浏览器认证）----
+# dsh web 每次进程启动生成一次性 launch token，打印在启动输出里
+# （URL 形如 http://127.0.0.1:3080/?token=xxx）。浏览器/WebView 首次必须带
+# token 访问一次：服务端校验通过后种下持久 cookie（默认 30 天，绑定
+# Host:127.0.0.1:3080），此后普通访问免认证。主浏览器已各自完成认证；本壳的
+# WebView2 是独立 cookie 库，须自己完成一次 token 交换——每次开窗/重建/
+# 刷新导航都优先用带 token 的 URL 打开（幂等：cookie 已有效时等于续期，
+# 服务端 303 落回干净页面），随后继续使用干净 WebUrl。
+# 用法：把 dsh web 启动时打印的完整 URL（含 ?token=，或只存 token 本身）
+# 写入 exe 同目录 dsh-web-token.txt 后启动客户端。
+# 注意：dsh web 重启会更换 token；若页面停在 401，更新该文件后重启客户端
+# 即可（cookie 未过期时即使 token 文件缺失/过期也不影响正常访问）。
+proc launchToken(): string =
+  let p = getAppDir() & "\\" & WebTokenFile
+  try:
+    if fileExists(p):
+      let raw = strip(readFile(p))
+      if raw.len > 0:
+        let i = raw.find("?token=")
+        result = if i >= 0: raw[(i + 7)..^1] else: raw
+  except CatchableError:
+    discard
+
+proc bootUrl(): string =
+  ## 认证引导 URL：token 文件有效时带 token，否则回落干净 WebUrl
+  let t = launchToken()
+  if t.len > 0: WebUrl & "?token=" & t else: WebUrl
 
 var
   gWindow: Window
@@ -160,7 +189,7 @@ proc toggleMainWindow() =
     # 窗口不存在（被销毁）→ 重建（v10：任何场景都不让窗口消失变成"程序消失"）
     dbg("toggle -> window missing, re-show")
     gWindow.setSize(gLastW, gLastH)
-    discard gWindow.showWv(WebUrl)
+    discard gWindow.showWv(bootUrl())
 
 proc showMainWindowIfMissing() =
   ## 托盘"打开 DSH"：窗口存在则恢复显示，不存在则重建
@@ -170,7 +199,7 @@ proc showMainWindowIfMissing() =
   else:
     dbg("tray open -> re-show window")
     gWindow.setSize(gLastW, gLastH)
-    discard gWindow.showWv(WebUrl)
+    discard gWindow.showWv(bootUrl())
 
 proc onWebuiClose(window: csize_t): bool {.cdecl.} =
   ## 点 ✕（或 Alt+F4）→ 最小化而不是关闭；退出只走托盘"退出"
@@ -856,7 +885,7 @@ when isMainModule:
   gLastW = saved.width
   gLastH = saved.height
   dbg("before showWv")
-  let shown = gWindow.showWv(WebUrl)
+  let shown = gWindow.showWv(bootUrl())
   dbg("after showWv shown=" & $shown)
 
   # 点 ✕ = 最小化（webui 官方 close handler，退出只走托盘"退出"）
@@ -940,7 +969,7 @@ when isMainModule:
               dbg("window gone -> re-show")
               gLastRetryTime = nowT
               gWindow.setSize(gLastW, gLastH)
-              discard gWindow.showWv(WebUrl)
+              discard gWindow.showWv(bootUrl())
             else:
               dbg("backend down -> wait")
               gBackendDown = true
@@ -953,7 +982,7 @@ when isMainModule:
     if gBackendDown and backendAlive():
       dbg("backend recovered -> re-show")
       gWindow.setSize(gLastW, gLastH)
-      discard gWindow.showWv(WebUrl)
+      discard gWindow.showWv(bootUrl())
       gBackendDown = false
 
     # ---- 后端重启检测：restart dsh-web 后自动刷新内嵌页面（2026-08-21 主要求）----
@@ -972,8 +1001,8 @@ when isMainModule:
         gBackendWasDown = false
         dbg("backend recovered -> navigate refresh")
         if findMainWindow() != 0:
-          gWindow.navigate(WebUrl)
-          dbg("navigate to " & WebUrl)
+          gWindow.navigate(bootUrl())
+          dbg("navigate to " & bootUrl())
 
     # ---- 宠物颜色：提问(橙,文件) > 回复完成(绿,文件) > 主窗口打开(蓝) > 最小化/未现(黑) ----
     # 2026-08-16 主定稿：颜色跟随客户端主窗口状态（打开=黑、最小化=蓝）；
