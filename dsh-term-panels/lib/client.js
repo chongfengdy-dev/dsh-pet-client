@@ -1642,7 +1642,7 @@ window.__ModuleLoader__.load({
 				// 2026-09-05 主试调定稿：grid 列宽对齐——label 列宽取最长行、value 列随之对齐（上下对齐），金额列右贴
 				Object.assign(d.style, {
 					display: "grid",
-					gridTemplateColumns: "42px auto 1fr",   // 2026-09-05 label 列固定 42px：各行数字起点统一
+					gridTemplateColumns: "47px auto 1fr",   // 2026-09-05 label 列固定 42px：各行数字起点统一
 					columnGap: "6px",
 					alignItems: "baseline",
 				});
