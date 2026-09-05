@@ -1,0 +1,13 @@
+{
+  "name": "dsh-web-token-sync",
+  "version": "1.0.0",
+  "private": true,
+  "description": "dsh web 启动后自动把带 token 的认证 URL 写入客户端 token 文件（免手动维护）",
+  "license": "MIT",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./package.json": "./package.json"
+  }
+}
