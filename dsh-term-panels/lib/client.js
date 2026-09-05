@@ -1788,22 +1788,26 @@ window.__ModuleLoader__.load({
 				visibility: "hidden", // 定位到对话区左内缘前不显示
 			});
 
-			// ---- 状态（2026-09-05 数据层改 DOM 驱动：新版 dsh 0.1.2-rc.1 移除
-			//      session.getSnapshot() 快照 API，改为事件流分页；消息行锚点
-			//      data-chat-anchor-key / data-chat-flow-kind 两版仍在，据此扫描）----
+			// ---- 状态（2026-09-05 数据层：host turnOutline 投影全量优先 + DOM 扫描兜底。
+			//      新版 dsh 0.1.2-rc.1 移除 session.getSnapshot() 快照 API、对话区改
+			//      懒加载窗口（DOM 只含尾部页）——全量大纲只能读 host 投影
+			//      projections.get("turnOutline")（每轮一条，全量不受窗口限制）。----
 			let sessionId = null;
-			let binding = null;      // 新版 sessions.binding(id).session：仅用 loadOlder()/hasMore 补历史
-			let userMsgs = [];       // [{text, key}]（我的消息：kind=user/steering，DOM 扫描，文档序=时间序）
-			let activeIdx = -1;      // 当前点击/选中的消息下标（-1=无，横杠+文字变蓝）
-			let rows = [];           // {row, bar, num, txt, idx} 行引用（颜色状态更新用）
-			let expanded = false;    // 是否展开（平时只显示横杠，hover 展开显示行号+文本）
-			let keyMap = {};         // 官方锚点 key → DOM 行元素（数据/DOM 变化时重建）
-			let rowObserver = null;  // 对话区 DOM 观察（新消息/分页/compaction 驱动重扫）
-			let observedRoot = null; // 当前观察的对话区根（根被重建时重挂观察）
-			let pendingTarget = null;   // 懒加载定位目标：点击后等待"加载更早"把目标加载进 DOM
-			let lastLoadClick = 0;      // 触发"加载更早"节流
-			let pendingTimer = null;    // 定位超时保护
-			let rebuildTimer = null;    // DOM 变化防抖计时
+			let binding = null;          // 新版 sessions.binding(id).session：projections/loadOlder()/hasMore
+			let projectionUnsub = null;  // 投影订阅退订（会话切换释放）
+			let projTimer = null;        // 投影变更防抖
+			let outlineMode = "dom";     // "outline"=turnOutline 投影（每轮一条）| "dom"=DOM 扫描兜底
+			let userMsgs = [];           // [{text, turn?, key?}]（大纲条目：投影=轮，兜底=我的消息行）
+			let activeIdx = -1;          // 当前点击/选中的消息下标（-1=无，横杠+文字变蓝）
+			let rows = [];               // {row, bar, num, txt, idx} 行引用（颜色状态更新用）
+			let expanded = false;        // 是否展开（平时只显示横杠，hover 展开显示行号+文本）
+			let keyMap = {};             // 官方锚点 key → DOM 行元素（数据/DOM 变化时重建）
+			let rowObserver = null;      // 对话区 DOM 观察（新消息/分页/compaction 驱动重扫）
+			let observedRoot = null;     // 当前观察的对话区根（根被重建时重挂观察）
+			let pendingTarget = null;    // 懒加载定位目标（{turn}|{key}）：等"加载更早"把目标加载进 DOM
+			let lastLoadClick = 0;       // 触发"加载更早"节流
+			let pendingTimer = null;     // 定位超时保护
+			let rebuildTimer = null;     // DOM 变化防抖计时
 
 			function currentSessionId() {
 				const snap = sessions.list && sessions.list.getSnapshot ? sessions.list.getSnapshot() : null;
@@ -1817,8 +1821,9 @@ window.__ModuleLoader__.load({
 
 			function rebind() {
 				const sid = currentSessionId();
-				if (sid === sessionId) return;   // 会话未切换：DOM 变化由 MutationObserver 驱动
-				// 会话切换：重置绑定与数据，等新会话对话区渲染后扫描
+				if (sid === sessionId) return;   // 会话未切换：变更由投影订阅/DOM 观察驱动
+				// 会话切换：退订旧投影订阅，重新绑定新会话
+				if (projectionUnsub) { try { projectionUnsub(); } catch (e) {} projectionUnsub = null; }
 				sessionId = sid;
 				binding = null;
 				if (sid !== null) {
@@ -1827,15 +1832,97 @@ window.__ModuleLoader__.load({
 				userMsgs = [];
 				rows = [];
 				renderRows();
-				// 对话区随会话切换异步渲染 → 延迟多次扫描兜底
-				setTimeout(rescanFromDom, 150);
-				setTimeout(rescanFromDom, 800);
+				// 订阅 host 投影：turnOutline 等推送即刷新大纲（新轮次/历史补齐都会推）
+				const bs = boundSession();
+				const proj = bs && bs.projections ? bs.projections : null;
+				if (proj && typeof proj.subscribeAny === "function") {
+					try {
+						projectionUnsub = proj.subscribeAny(() => {
+							clearTimeout(projTimer);
+							projTimer = setTimeout(syncOutline, 80);
+						});
+					} catch (e) {}
+				}
+				// 新会话数据异步就绪 → 延迟多次同步兜底
+				setTimeout(syncOutline, 120);
+				setTimeout(syncOutline, 500);
+				setTimeout(syncOutline, 1500);
 			}
 
-			// ---- DOM 全量扫描（取代旧快照同步）：对话区已加载行中收集我的消息。
-			// key=官方 data-chat-anchor-key（唯一锚点），文本从行内提取（排除按钮/图标），
-			// 文档序=时间序。新版消息流式/分页/compaction 都会触发 DOM 变化→防抖重扫。----
-			function rescanFromDom() {
+			// 读 host turnOutline 投影（每轮一条：{turn, seq, prompt, response}，全量升序）
+			function readProjectionOutline() {
+				const bs = boundSession();
+				const proj = bs && bs.projections ? bs.projections : null;
+				if (!proj) return null;
+				try {
+					const v = proj.get("turnOutline");
+					if (Array.isArray(v) && v.length) return v;
+				} catch (e) {}
+				return null;
+			}
+			// ---- 大纲同步入口：host 全量投影优先（不受懒加载窗口限制）；
+			//      投影缺失（旧版/未推送）→ DOM 扫描兜底。 ----
+			function syncOutline() {
+				const outline = readProjectionOutline();
+				if (outline) {
+					const next = [];
+					for (const t of outline) {
+						if (typeof t.prompt !== "string" || !t.prompt) continue;
+						next.push({ text: t.prompt, turn: t.turn, seq: t.seq });
+					}
+					applyMsgList(next, "outline");
+				} else {
+					domScan();
+				}
+			}
+			// 整体替换大纲列表（按 turn/key 序比对，变了才重建行）
+			function applyMsgList(next, mode) {
+				const keyOf = (m) => (mode === "outline" ? m.turn : m.key);
+				let changed = next.length !== userMsgs.length;
+				if (!changed) {
+					for (let i = 0; i < next.length; i++) {
+						if (keyOf(next[i]) !== keyOf(userMsgs[i])) { changed = true; break; }
+					}
+				}
+				if (changed) {
+					userMsgs = next;
+					outlineMode = mode;
+					renderRows();
+				}
+				afterSync();
+			}
+			function afterSync() {
+				const root = findChatRoot();
+				if (root) rebuildKeyMap(root);
+				const bs = boundSession();
+				numHiddenByLoad = !!(bs && bs.hasMore);   // 加载历史期间隐藏行号（序号前移会跳）
+				updateExpanded(expanded);
+				checkPending();
+			}
+			// 点击跳转目标检查：加载出来→立即定位；没加载→继续触发"加载更早"
+			function checkPending() {
+				if (!pendingTarget) return;
+				const el = findTargetEl(pendingTarget);
+				if (el) {
+					pendingTarget = null;
+					clearTimeout(pendingTimer);
+					if (el) jumpTo(el);
+				} else {
+					maybeLoadOlder();
+				}
+			}
+			// 定位目标 DOM 行：outline 模式按轮号 data-chat-turn；DOM 兜底按官方 key 锚点
+			function findTargetEl(m) {
+				const root = findChatRoot();
+				if (!root) return null;
+				if (m.turn != null) {
+					return root.querySelector('[data-chat-turn="' + m.turn + '"]');
+				}
+				return m.key ? (keyMap[m.key] || null) : null;
+			}
+			// ---- DOM 扫描（兜底模式：投影不可用时收集已加载窗口内我的消息行；
+			//      key=官方 data-chat-anchor-key，文档序=时间序，文本行内提取）----
+			function domScan() {
 				const root = findChatRoot();
 				if (!root) return;
 				const next = [];
@@ -1849,31 +1936,7 @@ window.__ModuleLoader__.load({
 					seen.add(k);
 					next.push({ text: rowTextOf(el), key: k });
 				}
-				// 整体替换（key 序比对，变了才重建行）
-				let changed = next.length !== userMsgs.length;
-				if (!changed) {
-					for (let i = 0; i < next.length; i++) {
-						if (next[i].key !== userMsgs[i].key) { changed = true; break; }
-					}
-				}
-				if (changed) {
-					userMsgs = next;
-					renderRows();
-				}
-				rebuildKeyMap(root);
-				// 加载历史期间隐藏行号（序号整体前移会跳），新版 hasMore 挂在 session 上
-				const bs = boundSession();
-				numHiddenByLoad = !!(bs && bs.hasMore);
-				updateExpanded(expanded);
-				// 点击跳转的目标处理：加载出来→立即定位；没加载→继续触发"加载更早"
-				if (pendingTarget && keyMap[pendingTarget]) {
-					const el = keyMap[pendingTarget];
-					pendingTarget = null;
-					clearTimeout(pendingTimer);
-					if (el) jumpTo(el);
-				} else if (pendingTarget) {
-					maybeLoadOlder();
-				}
+				applyMsgList(next, "dom");
 			}
 
 			// 从 DOM 消息行提取文本（排除按钮/图标/aria-hidden 操作区/时间等 UI 噪音）
@@ -1939,7 +2002,7 @@ window.__ModuleLoader__.load({
 				observedRoot = root;
 				rowObserver = new MutationObserver(() => {
 					clearTimeout(rebuildTimer);
-					rebuildTimer = setTimeout(rescanFromDom, 120);
+					rebuildTimer = setTimeout(syncOutline, 120);
 				});
 				rowObserver.observe(root, { childList: true, subtree: true });
 			}
@@ -2116,14 +2179,14 @@ window.__ModuleLoader__.load({
 				applyActive();
 				const m = userMsgs[userIndex];
 				if (!m) return;
-				const key = m.key;
-				// 官方 key 定位：keyMap 已按 data-chat-anchor-key 建好（数据/DOM 变化时重建）
-				if (key && keyMap[key]) { jumpTo(keyMap[key]); return; }
-				// 目标不在 DOM（对话区懒加载，"加载更早"的历史还没加载）：
-				// 设 pendingTarget（key），触发"加载更早"循环直到目标出现（rebuildRowMap 里续推）
-				pendingTarget = key;
+				// 目标定位：outline 模式按轮号 data-chat-turn，DOM 兜底按官方 key 锚点
+				const el = findTargetEl(m);
+				if (el) { jumpTo(el); return; }
+				// 目标不在 DOM（历史懒加载未载入）：设 pendingTarget，触发"加载更早"循环
+				// 直到目标出现（syncOutline/afterSync 检查续推），20s 超时放弃
+				pendingTarget = m;
 				clearTimeout(pendingTimer);
-				pendingTimer = setTimeout(() => { pendingTarget = null; }, 15000); // 15s 超时放弃
+				pendingTimer = setTimeout(() => { pendingTarget = null; }, 20000);
 				maybeLoadOlder();
 			}
 
@@ -2151,7 +2214,7 @@ window.__ModuleLoader__.load({
 			// 等对话区渲染后定位 + 建立尺寸跟踪（2026-08-27 主需求：新客户端即时显示、侧边栏宽度变化跟随）
 			ensureOutlineTracking();
 			ensureRowObserver();
-			rescanFromDom();
+			syncOutline();
 			// ---- 视口跟随：对话区滚动时同步 activeIdx（事件驱动+节流，非轮询；
 			//      点跳转已在 scrollToMessage 里直接设 activeIdx） ----
 			function syncActiveFromView() {
@@ -2166,9 +2229,16 @@ window.__ModuleLoader__.load({
 				const els = document.elementsFromPoint(x, y);
 				for (const el of els) {
 					const anc = el.closest ? el.closest('[data-chat-anchor-key]') : null;
-					const key = anc && anc.getAttribute('data-chat-anchor-key');
-					if (!key) continue;
-					const idx = userMsgs.findIndex(m => m.key === key);
+					if (!anc) continue;
+					let idx = -1;
+					if (outlineMode === "outline") {
+						// 轮模式：DOM 行带 data-chat-turn（轮号），命中即该轮大纲条目
+						const turn = anc.getAttribute("data-chat-turn");
+						if (turn != null) idx = userMsgs.findIndex(m => String(m.turn) === turn);
+					} else {
+						const key = anc.getAttribute("data-chat-anchor-key");
+						if (key) idx = userMsgs.findIndex(m => m.key === key);
+					}
 					if (idx >= 0 && idx !== activeIdx) {
 						activeIdx = idx;
 						applyActive();
