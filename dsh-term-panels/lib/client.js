@@ -35,7 +35,7 @@ window.__ModuleLoader__.load({
 			{ name: "Courier New", value: '"Courier New", monospace' },
 			{ name: "宋体", value: "SimSun, monospace" },
 			{ name: "微软雅黑", value: '"Microsoft YaHei", monospace' },
-			{ name: "霞鹜文楷", value: '"LXGW WenKai", "霞鹜文楷", serif' },   // 2026-09-05 主加项
+			// 2026-09-05 主定：普通霞鹜文楷不保留（终端用等宽更合适），只留等宽版
 			{ name: "霞鹜文楷等宽", value: '"LXGW WenKai Mono", "霞鹜文楷等宽", monospace' },   // 2026-09-05 主加项
 			{ name: "Ubuntu Mono", value: '"Ubuntu Mono", Consolas, monospace' },   // 2026-09-05 主加项
 		];
