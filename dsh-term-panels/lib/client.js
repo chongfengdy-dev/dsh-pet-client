@@ -87,7 +87,8 @@ window.__ModuleLoader__.load({
 			const connection = ctx.connection;
 			if (document.getElementById(DOCK_ID)) return; // 已注入
 
-			// ---------- 左下角悬浮按钮块（终端；2026-09-05 从右侧改左下：右侧与官方气泡大纲重叠） ----------
+			// ---------- 悬浮终端按钮（贴对话区左下角；2026-09-05 右侧与官方气泡大纲重叠、
+			//      浏览器左下角与官方设置重叠 → 挂进对话区滚动容器左下，随容器不随页面） ----------
 			const dock = document.createElement("div");
 			dock.id = DOCK_ID;
 			Object.assign(dock.style, {
@@ -97,6 +98,34 @@ window.__ModuleLoader__.load({
 			const btnTerm = dockButton(">_", "打开终端");
 			dock.appendChild(btnTerm);
 			document.body.appendChild(dock);
+			// 对话区根（新版 [data-conversation-scroll]；旧版 [data-slot="conversation"]）
+			function findConversationRoot() {
+				return document.querySelector('[data-slot="conversation"]')
+					|| document.querySelector('[data-conversation-scroll]');
+			}
+			// 把 dock 移入对话区滚动容器（absolute 贴其左下角；容器重建连带销毁时自动重建重挂）
+			function remountTermDock() {
+				const root = findConversationRoot();
+				if (!root) return;                       // 对话区未出现：dock 暂留 body 左下角
+				if (!dock.isConnected) {
+					const nb = dockButton(">_", "打开终端");
+					dock.innerHTML = "";
+					dock.appendChild(nb);
+					document.body.appendChild(dock);
+				}
+				if (root.contains(dock)) return;
+				try { if (getComputedStyle(root).position === "static") root.style.position = "relative"; } catch (e) {}
+				root.appendChild(dock);
+				Object.assign(dock.style, {
+					position: "absolute", left: "10px", bottom: "10px",
+					top: "auto", right: "auto", transform: "none",
+				});
+			}
+			remountTermDock();
+			try {
+				// 对话区渲染/重建由 React 驱动 → 观察 body 子树的挂载变化，自动跟随
+				new MutationObserver(() => remountTermDock()).observe(document.body, { childList: true, subtree: true });
+			} catch (e) {}
 
 			// ---------- 终端面板（内嵌 xterm，直连 3081；可拖拽 + 可调大小，记忆几何） ----------
 			const termPanel = panel(TERM_PANEL_ID, ">_ 终端");
@@ -501,7 +530,8 @@ window.__ModuleLoader__.load({
 				termSettingsPanel.style.left = Math.max(8, br.right - termSettingsPanel.offsetWidth) + "px";
 				termSettingsPanel.style.top = Math.max(8, br.top - termSettingsPanel.offsetHeight) + "px";
 			}, 300);
-			btnTerm.addEventListener("click", (e) => {
+			// 点击事件委托到 dock（dock 内容重建不丢事件）
+			dock.addEventListener("click", (e) => {
 				e.stopPropagation();
 				if (termPanel.root.style.display === "none") {
 					ensureTerminal(termState, termHost);
