@@ -36,6 +36,8 @@ window.__ModuleLoader__.load({
 			{ name: "宋体", value: "SimSun, monospace" },
 			{ name: "微软雅黑", value: '"Microsoft YaHei", monospace' },
 			{ name: "霞鹜文楷", value: '"LXGW WenKai", "霞鹜文楷", serif' },   // 2026-09-05 主加项
+			{ name: "霞鹜文楷等宽", value: '"LXGW WenKai Mono", "霞鹜文楷等宽", monospace' },   // 2026-09-05 主加项
+			{ name: "Ubuntu Mono", value: '"Ubuntu Mono", Consolas, monospace' },   // 2026-09-05 主加项
 		];
 		// 界面字体选项（覆盖 dsh 的 --dsw-font-family；2026-08-27 主需求：字型选择）
 		const UI_FONT_OPTIONS = [
@@ -118,8 +120,8 @@ window.__ModuleLoader__.load({
 				cursor: "pointer", border: "1px solid var(--dsw-alias-border-l2)",
 				background: "var(--dsw-alias-bg-layer-2)",
 				color: "var(--dsw-alias-label-secondary)",
-				fontSize: "12px", lineHeight: "1", padding: "5px 8px", borderRadius: "7px",
-				opacity: ".55", transition: "opacity .15s",
+				fontSize: "18px", lineHeight: "1", padding: "7px 11px", borderRadius: "9px",   // 2026-09-05 加大
+				opacity: ".6", transition: "opacity .15s",
 			});
 			settingsBtn.textContent = "⚙";
 			settingsBtn.title = "终端设置";
@@ -565,15 +567,18 @@ window.__ModuleLoader__.load({
 			buildArchivedPanel(ctx);
 
 			// ---------- 点击外部收起面板（设置浮层算面板内部，不收起） ----------
+			// 点击外部关闭：2026-09-05 分层——浮层内不处理；终端面板内（非浮层）只收浮层；
+			// 完全外部才关浮层 + 关终端面板（⚙ 按钮已 stopPropagation 不触发此逻辑）
 			document.addEventListener("click", (e) => {
 				const t = e.target;
-				const inPanel = t.closest && (t.closest("#" + TERM_PANEL_ID) ||
-					t.closest("#dsh-term-settings-panel"));
-				const inBtn = t.closest && t.closest("#" + DOCK_ID);
-				if (!inPanel && !inBtn) {
-					closePanel(TERM_PANEL_ID);
-					termSettingsPanel.style.display = "none";   // 面板关闭时浮层同步收起
+				if (!t || !t.closest) return;
+				if (t.closest("#dsh-term-settings-panel")) return;   // 浮层内
+				if (t.closest("#" + TERM_PANEL_ID)) {               // 终端面板内：只收起设置浮层
+					if (termSettingsPanel.style.display !== "none") termSettingsPanel.style.display = "none";
+					return;
 				}
+				closePanel(TERM_PANEL_ID);
+				termSettingsPanel.style.display = "none";
 			});
 
 			// ---------- hash 通信（客户端菜单触发悬浮终端） ----------
