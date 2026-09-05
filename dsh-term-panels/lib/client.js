@@ -87,50 +87,12 @@ window.__ModuleLoader__.load({
 			const connection = ctx.connection;
 			if (document.getElementById(DOCK_ID)) return; // 已注入
 
-			// ---------- 悬浮终端按钮（贴对话区可视区左下角；2026-09-05 右侧与官方气泡大纲、
-			//      页面左下与官方设置重叠 → 固定定位 + 实时跟随对话区位置，不写入对话区 DOM） ----------
+			// 注入标记（隐藏，防重复注入；2026-09-05 起终端入口收进 HUD 底部，不再独立悬浮：
+			// 独立钮与官方气泡大纲/设置等悬浮 UI 反复撞位）
 			const dock = document.createElement("div");
 			dock.id = DOCK_ID;
-			Object.assign(dock.style, {
-				position: "fixed", zIndex: "99990",
-				display: "flex", flexDirection: "column", gap: "10px",
-			});
-			const btnTerm = dockButton(">_", "打开终端");
-			dock.appendChild(btnTerm);
+			dock.style.display = "none";
 			document.body.appendChild(dock);
-			// 对话区根（依次尝试：旧版容器 / 新版滚动容器 / 官方对话列）
-			function findConversationRoot() {
-				return document.querySelector('[data-slot="conversation"]')
-					|| document.querySelector('[data-conversation-scroll]')
-					|| document.querySelector('[data-chat-flow]')
-					|| null;
-			}
-			// fixed 定位贴对话区可视区左下角（44px 按钮 + 10px 边距）；找不到时隐藏并诊断一次
-			function placeTermDock() {
-				const root = findConversationRoot();
-				let r = null;
-				if (root) { try { r = root.getBoundingClientRect(); } catch (e) {} }
-				if (!root || !r || r.width <= 0 || r.height <= 0) {
-					if (!dock.__warned) {
-						dock.__warned = true;
-						console.log("[dsh-panels] dock: 对话区容器未找到。候选计数：",
-							"data-slot=conversation:", document.querySelectorAll('[data-slot="conversation"]').length,
-							"data-conversation-scroll:", document.querySelectorAll('[data-conversation-scroll]').length,
-							"data-chat-flow:", document.querySelectorAll('[data-chat-flow]').length);
-					}
-					dock.style.display = "none";
-					return;
-				}
-				dock.style.display = "flex";
-				dock.style.left = Math.max(8, r.left + 10) + "px";
-				dock.style.top = Math.max(8, r.bottom - 10 - 44) + "px";
-				dock.style.bottom = "auto";
-				dock.style.right = "auto";
-				dock.style.transform = "none";
-			}
-			placeTermDock();
-			setInterval(placeTermDock, 300);   // 布局/侧栏折叠等变化跟随（轻量 rect 查询）
-			window.addEventListener("resize", placeTermDock);
 
 			// ---------- 终端面板（内嵌 xterm，直连 3081；可拖拽 + 可调大小，记忆几何） ----------
 			const termPanel = panel(TERM_PANEL_ID, ">_ 终端");
@@ -535,16 +497,7 @@ window.__ModuleLoader__.load({
 				termSettingsPanel.style.left = Math.max(8, br.right - termSettingsPanel.offsetWidth) + "px";
 				termSettingsPanel.style.top = Math.max(8, br.top - termSettingsPanel.offsetHeight) + "px";
 			}, 300);
-			// 点击事件委托到 dock（dock 内容重建不丢事件）
-			dock.addEventListener("click", (e) => {
-				e.stopPropagation();
-				if (termPanel.root.style.display === "none") {
-					ensureTerminal(termState, termHost);
-					openPanel(TERM_PANEL_ID);
-				} else {
-					closePanel(TERM_PANEL_ID);
-				}
-			});
+			// （终端开关事件已随按钮收进 HUD 底部，见下方 hud 构建段）
 			// 轮询：保存几何 + 面板尺寸变化时 fit 终端
 			setInterval(() => {
 				const el = document.getElementById(TERM_PANEL_ID);
@@ -560,6 +513,38 @@ window.__ModuleLoader__.load({
 			// ---------- Token 常驻 HUD（右上角，半透明，可拖动） ----------
 			const hud = buildHud();
 			document.body.appendChild(hud.root);
+
+			// ---------- HUD 底部：终端快捷按钮行（2026-09-05 主指示：独立悬浮钮
+			//      与官方悬浮 UI 反复撞位 → 收进 HUD 下开一行，点击弹出/收起终端） ----------
+			const termBtnRow = document.createElement("div");
+			Object.assign(termBtnRow.style, {
+				display: "flex", gap: "6px", marginTop: "8px", justifyContent: "flex-end",
+			});
+			const btnOpenTerm = document.createElement("button");
+			btnOpenTerm.textContent = ">_ 终端";
+			btnOpenTerm.title = "打开/收起终端面板";
+			Object.assign(btnOpenTerm.style, {
+				border: "1px solid var(--dsw-alias-border-l2)",
+				background: "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))",
+				color: "var(--dsw-alias-label-secondary)", fontSize: "12px",
+				padding: "4px 12px", borderRadius: "8px", cursor: "pointer",
+				fontFamily: "Consolas, monospace", lineHeight: "1.5",
+				transition: "background .12s",
+			});
+			btnOpenTerm.addEventListener("mousedown", (e) => e.stopPropagation()); // 防触发 HUD 拖动
+			btnOpenTerm.addEventListener("mouseenter", () => { btnOpenTerm.style.background = "var(--dsw-alias-interactive-bg-hover)"; btnOpenTerm.style.color = "var(--dsw-alias-label-primary)"; });
+			btnOpenTerm.addEventListener("mouseleave", () => { btnOpenTerm.style.background = "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))"; btnOpenTerm.style.color = "var(--dsw-alias-label-secondary)"; });
+			btnOpenTerm.addEventListener("click", (e) => {
+				e.stopPropagation();
+				if (termPanel.root.style.display === "none") {
+					ensureTerminal(termState, termHost);
+					openPanel(TERM_PANEL_ID);
+				} else {
+					closePanel(TERM_PANEL_ID);
+				}
+			});
+			termBtnRow.appendChild(btnOpenTerm);
+			hud.root.appendChild(termBtnRow);
 
 			// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时屏幕中央提示） ----------
 			buildZoomHud();
@@ -633,29 +618,6 @@ window.__ModuleLoader__.load({
 				}
 			} catch (e) {}
 			return "light";
-		}
-		function dockButton(label, title) {
-			const b = document.createElement("button");
-			b.title = title;
-			Object.assign(b.style, {
-				width: "44px", height: "44px", borderRadius: "12px",
-				border: "1px solid var(--dsw-alias-border-l2)",
-				background: "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))",
-				color: "var(--dsw-alias-label-primary)", fontSize: "16px",
-				fontFamily: 'Consolas, monospace',
-				cursor: "pointer", boxShadow: "0 4px 12px rgba(0,0,0,.25)",
-				transition: "background .12s, transform .12s",
-			});
-			b.addEventListener("mouseenter", () => {
-				b.style.background = "var(--dsw-alias-interactive-bg-hover)";
-				b.style.transform = "scale(1.06)";
-			});
-			b.addEventListener("mouseleave", () => {
-				b.style.background = "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))";
-				b.style.transform = "scale(1)";
-			});
-			b.textContent = label;
-			return b;
 		}
 
 		// ---------- 工具：面板容器（标题栏/关闭/拖拽/resize） ----------
