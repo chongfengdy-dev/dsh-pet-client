@@ -63,7 +63,7 @@ window.__ModuleLoader__.load({
 			st.textContent = value
 				? ":root{--dsw-font-family:" + value + " !important;--ds-font-family-code:" + value + " !important}"
 					+ "body{font-family:" + value + " !important}"
-					+ "#" + HUD_ID + "{font-family:" + value + " !important}"   // 2026-09-05 HUD 字体跟随设置
+					+ "#" + HUD_ID + ",#" + HUD_ID + " span{font-family:" + value + " !important}"   // 2026-09-05 HUD（含数字列）字体跟随设置
 				: "";
 		}
 		// 界面字号应用（缩放比例 = 字号/基准14；2026-08-27 主需求）
