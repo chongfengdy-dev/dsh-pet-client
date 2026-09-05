@@ -24,20 +24,19 @@ dsh --profile web
 ### 第 3 步：打开客户端
 双击本目录的 `dsh_client_full.exe`，等窗口出现即可使用。
 
-### 认证引导（首次/升级后必看）
-客户端内嵌页面与浏览器各自独立认证。若窗口停在
-`dsh web authentication required; reopen the URL printed by dsh web.`：
+### 认证引导（首次/升级后一般无需操作）
+dsh web（0.1.2-rc.1 起）每次启动会生成一次性访问 token；若 web 侧已挂载
+`dsh-web-token-sync` 插件，每次 dsh web 启动都会**自动**把最新 token 写入 exe
+同目录的 `dsh-web-token.txt`，客户端重开即自动完成认证，全程无需手动。
 
-1. 复制 dsh web 启动时打印的**完整 URL**（含 `?token=`，或只复制 `token=` 后面的串）；
-2. 在 exe 同目录新建文本文件 `dsh-web-token.txt`，把上面内容粘贴进去保存；
-3. 重新打开客户端（或等窗口重建），页面自动完成认证并正常加载。
-
-之后 30 天内免维护；期间 dsh web 重启也不影响（cookie 仍有效）。
-cookie 过期后重复以上步骤即可。
+仅当 web 侧未挂该插件时，才需要手动一次（把 dsh web 启动打印的完整 URL
+`http://127.0.0.1:3080/?token=xxxx`，或只复制 token 本身，写入 exe 同目录
+`dsh-web-token.txt` 保存，再重开客户端）。之后 30 天内免维护（服务端 cookie
+30 天有效，期间 dsh web 重启不影响）。
 
 > **应急后备**：内嵌页暂时打不开时（如 dsh 大版本升级导致的兼容问题），
-> 托盘/悬浮鲸鱼右键菜单选「浏览器打开原版」，会用默认浏览器打开原版 dsh
-> 网页继续使用（无自定义元素），不受本客户端版本影响。
+> 托盘/悬浮鲸鱼右键菜单选「浏览器打开原版」，会用默认浏览器打开 dsh 网页
+> 应急使用，不受本客户端版本限制。
 
 ## 二、使用说明
 
@@ -48,14 +47,17 @@ cookie 过期后重复以上步骤即可。
 | 托盘图标 右键 | 菜单：打开 DSH / 浏览器打开原版 / 显示宠物 / 退出 |
 | 悬浮鲸鱼 左键 | 显示 / 最小化 主窗口 |
 | 悬浮鲸鱼 右键 | 同托盘菜单 |
-| 托盘「浏览器打开原版」 | 用默认浏览器打开**原版 dsh 网页**（无自定义元素）——客户端内嵌页打不开时的后备入口 |
+| 托盘「浏览器打开原版」 | 用默认浏览器打开 dsh 网页应急（客户端打不开时用） |
+| 页面右上角 Token HUD 底部「>_ 终端」 | 打开/收起内嵌终端面板（xterm，走本机 3081 服务） |
+| Token HUD | 词元用量/余额悬浮窗（可拖动；字体/字号随设置） |
 | 托盘「显示宠物」 | 显示悬浮鲸鱼（默认隐藏） |
 | 托盘「退出」 | 完全退出程序 |
 
 ## 三、常见问题
 
-- **客户端白屏/连不上**：确认第 2 步的 PowerShell 窗口还开着（dsh web 在 3080 端口运行）
-- **页面显示 authentication required**：按上面「认证引导」把带 token 的 URL 写入 `dsh-web-token.txt` 再重开客户端
+- **客户端白屏/连不上**：确认 dsh web 在 3080 端口运行（systemd：`sudo systemctl status dsh-web`）
+- **页面显示 authentication required**：先**完全退出并重开客户端**（token 文件由插件自动更新）；若仍未恢复，按上面「认证引导」手动写入最新 token
+- **dsh web 重启后客户端停在 401**：重开一次客户端即可（WebView 不会自动重载失败页）
 - **窗口标题不是 DeepSeek Harness**：属正常，客户端每 5 秒自动修正
 - **提示缺少 WebView2**：Win10/11 一般自带；没有的话装 https://developer.microsoft.com/microsoft-edge/webview2/
 - **端口被占用**：可用 `dsh --profile web --port 8080` 换端口，但客户端默认连 3080，换端口后客户端需改源码重新编译
