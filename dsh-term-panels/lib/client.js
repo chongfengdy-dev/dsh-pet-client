@@ -87,12 +87,11 @@ window.__ModuleLoader__.load({
 			const connection = ctx.connection;
 			if (document.getElementById(DOCK_ID)) return; // 已注入
 
-			// ---------- 右侧悬浮按钮块（终端） ----------
+			// ---------- 左下角悬浮按钮块（终端；2026-09-05 从右侧改左下：右侧与官方气泡大纲重叠） ----------
 			const dock = document.createElement("div");
 			dock.id = DOCK_ID;
 			Object.assign(dock.style, {
-				position: "fixed", right: "12px", top: "50%",
-				transform: "translateY(-50%)", zIndex: "99990",
+				position: "fixed", left: "16px", bottom: "20px", zIndex: "99990",
 				display: "flex", flexDirection: "column", gap: "10px",
 			});
 			const btnTerm = dockButton(">_", "打开终端");
