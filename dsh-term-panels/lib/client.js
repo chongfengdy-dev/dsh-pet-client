@@ -1639,9 +1639,12 @@ window.__ModuleLoader__.load({
 			// 列布局用 CSS grid（grid 容器已设 grid-template-columns: 1fr auto auto）
 			const row = (label, value, cost, valueColor, costColor) => {
 				const d = document.createElement("div");
-				// 2026-09-05 主试调：label 自然宽 + value 紧跟其后（数据左移），金额右推贴边
+				// 2026-09-05 主试调定稿：grid 列宽对齐——label 列宽取最长行、value 列随之对齐（上下对齐），金额列右贴
 				Object.assign(d.style, {
-					display: "flex", alignItems: "baseline", gap: "6px",
+					display: "grid",
+					gridTemplateColumns: "auto auto 1fr",
+					columnGap: "6px",
+					alignItems: "baseline",
 				});
 				const l = document.createElement("span");
 				l.style.color = "var(--dsw-alias-label-tertiary)";
@@ -1650,12 +1653,14 @@ window.__ModuleLoader__.load({
 				const v = document.createElement("span");
 				v.style.fontFamily = 'Consolas, monospace';
 				v.style.color = valueColor || "var(--dsw-alias-label-primary)";
+				v.style.textAlign = "right";
+				v.style.whiteSpace = "nowrap";
 				v.textContent = value;
 				const c = document.createElement("span");
 				c.style.fontFamily = 'Consolas, monospace';
 				c.style.color = costColor || "var(--dsw-alias-label-primary)";
-				c.style.marginLeft = "auto";   // 金额右推贴边
-				c.style.minWidth = "38px";
+				c.style.textAlign = "right";
+				c.style.whiteSpace = "nowrap";
 				c.textContent = cost;
 				d.appendChild(l);
 				d.appendChild(v);
