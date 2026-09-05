@@ -27,6 +27,7 @@ const
   # 托盘自定义消息
   WM_TRAYICON = WM_APP + 1
   ID_TRAY_OPEN = 1
+  ID_TRAY_BROWSER = 2      # 后备入口：默认浏览器打开原版 dsh
   ID_TRAY_EXIT = 3
   ID_TRAY_PET = 4          # 显示/隐藏宠物开关
 
@@ -241,22 +242,34 @@ proc setupTray(hwnd: HWND) =
   gTrayData.szTip[min(tip.len, 127)] = WCHAR(0)
   discard Shell_NotifyIconW(NIM_ADD, gTrayData.addr)
 
-proc showTrayMenu(hwnd: HWND) =
-  # 菜单项转 UTF-16（AppendMenuW 需要 LPCWSTR；UTF-8 直传会乱码）
+# ---- 菜单辅助：UTF-8 → UTF-16（AppendMenuW/ShellExecuteW 需要 LPCWSTR）----
+proc toW(s: string): LPCWSTR =
   const CP_UTF8 = 65001
-  proc w(s: string): LPCWSTR =
-    var buf {.global.}: array[256, WCHAR]  # 静态缓冲（菜单同步显示期间有效）
-    let n = MultiByteToWideChar(CP_UTF8, 0, s.cstring, -1,
-                                cast[LPWSTR](buf.addr), 256)
-    if n > 0: cast[LPCWSTR](buf.addr) else: nil
+  var buf {.global.}: array[512, WCHAR]  # 静态缓冲（同步调用期间有效）
+  let n = MultiByteToWideChar(CP_UTF8, 0, s.cstring, -1,
+                              cast[LPWSTR](buf.addr), 512)
+  if n > 0: cast[LPCWSTR](buf.addr) else: nil
+
+proc openOriginalInBrowser() =
+  ## 后备入口：用系统默认浏览器打开原版 dsh web（无自定义元素）。
+  ## 客户端内嵌页因 dsh 升级/认证等暂时打不开时，一键用浏览器应急。
+  ## 带 token 打开：浏览器首次自动完成认证；已认证过的浏览器则直接进原版。
+  let url = bootUrl()
+  dbg("open original in browser: " & url)
+  let wurl = toW(url)
+  if wurl != nil:
+    discard ShellExecuteW(0, nil, wurl, nil, nil, SW_SHOW)
+
+proc showTrayMenu(hwnd: HWND) =
   var hMenu = CreatePopupMenu()
-  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, w("打开 DSH"))
+  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, toW("打开 DSH"))
+  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_BROWSER, toW("浏览器打开原版"))
   if gPetVisible:
-    discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_PET, w("隐藏宠物"))
+    discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_PET, toW("隐藏宠物"))
   else:
-    discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_PET, w("显示宠物"))
+    discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_PET, toW("显示宠物"))
   discard AppendMenuW(hMenu, MF_SEPARATOR, 0, nil)
-  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, w("退出"))
+  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, toW("退出"))
   var pt: POINT
   discard GetCursorPos(pt.addr)
   discard SetForegroundWindow(hwnd)
@@ -280,6 +293,9 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
     case LOWORD(wParam)
     of ID_TRAY_OPEN:
       showMainWindowIfMissing()
+      result = 0
+    of ID_TRAY_BROWSER:
+      openOriginalInBrowser()
       result = 0
     of ID_TRAY_PET:
       # 显示/隐藏悬浮宠物（隐藏时停动画定时器省资源）
