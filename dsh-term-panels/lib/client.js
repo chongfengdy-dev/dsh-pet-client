@@ -2174,6 +2174,36 @@ window.__ModuleLoader__.load({
 				}
 				return null;
 			}
+			// ---- 绕过分页 hasMore 早停缺陷的历史补拉（2026-09-05）：dsh 0.1.2-rc.1 官方
+			//      loadOlder/loadThrough 长会话只加载两次即停（hasMore 误判），官方 rail 跳
+			//      历史因此点不动。这里直接调底层 events.prepend 循环直扩窗口（绕过
+			//      hasMore 检查），直到窗口覆盖目标 seq 或 host 确实无进展为止。----
+			function loadThroughEvents(seq) {
+				const bs = boundSession();
+				if (!bs || typeof seq !== "number") return;
+				const ev = bs.events;
+				if (!ev || typeof ev.prepend !== "function") return;
+				let guard = 0;
+				const settle = () => {
+					clearTimeout(rebuildTimer);
+					rebuildTimer = setTimeout(syncOutline, 250);
+				};
+				const step = () => {
+					guard++;
+					if (guard > 60) { settle(); return; }          // 防死循环
+					const base = bs.baseSeq;
+					if (base === undefined || base <= seq) { settle(); return; }  // 已覆盖目标
+					if (bs.loadingOlder) { setTimeout(step, 150); return; }       // 等官方分页完成再拉
+					ev.prepend({ beforeSeq: base, maxMessages: 200 })
+						.catch(() => {})
+						.finally(() => {
+							// baseSeq 前移 = 有进展 → 继续；无进展（host 真没更早）→ 停
+							if (bs.baseSeq !== undefined && bs.baseSeq < base) setTimeout(step, 60);
+							else settle();
+						});
+				};
+				step();
+			}
 			function scrollToMessage(userIndex) {
 				activeIdx = userIndex;
 				applyActive();
@@ -2182,8 +2212,31 @@ window.__ModuleLoader__.load({
 				// 目标定位：outline 模式按轮号 data-chat-turn，DOM 兜底按官方 key 锚点
 				const el = findTargetEl(m);
 				if (el) { jumpTo(el); return; }
-				// 目标不在 DOM（历史懒加载未载入）：设 pendingTarget，触发"加载更早"循环
-				// 直到目标出现（syncOutline/afterSync 检查续推），20s 超时放弃
+				// outline 模式历史轮未加载：官方 loadThrough 受 hasMore 早停缺陷影响（点不动），
+				// 优先官方路径、疑似未推进时切自研 prepend 直扩；加载完成后由 syncOutline 定位
+				const bs = boundSession();
+				if (outlineMode === "outline" && m.seq != null) {
+					pendingTarget = m;
+					clearTimeout(pendingTimer);
+					pendingTimer = setTimeout(() => { pendingTarget = null; }, 40000); // 40s 超时放弃
+					if (bs && typeof bs.loadThrough === "function") {
+						try {
+							if (!bs.hasMore && bs.events) { loadThroughEvents(m.seq); return; }
+							bs.loadThrough(m.seq).catch(() => {}).finally(() => {
+								// 官方路径未推进（hasMore 早停：窗口没扩到目标）→ 自研兜底
+								if (pendingTarget && !findTargetEl(m)) loadThroughEvents(m.seq);
+								else {
+									clearTimeout(rebuildTimer);
+									rebuildTimer = setTimeout(syncOutline, 200);
+								}
+							});
+							return;
+						} catch (e) { loadThroughEvents(m.seq); return; }
+					}
+					loadThroughEvents(m.seq);
+					return;
+				}
+				// DOM 兜底模式：逐页加载直到目标出现（checkPending 续推）
 				pendingTarget = m;
 				clearTimeout(pendingTimer);
 				pendingTimer = setTimeout(() => { pendingTarget = null; }, 20000);
