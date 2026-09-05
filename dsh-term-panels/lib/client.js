@@ -35,6 +35,7 @@ window.__ModuleLoader__.load({
 			{ name: "Courier New", value: '"Courier New", monospace' },
 			{ name: "宋体", value: "SimSun, monospace" },
 			{ name: "微软雅黑", value: '"Microsoft YaHei", monospace' },
+			{ name: "霞鹜文楷", value: '"LXGW WenKai", "霞鹜文楷", serif' },   // 2026-09-05 主加项
 		];
 		// 界面字体选项（覆盖 dsh 的 --dsw-font-family；2026-08-27 主需求：字型选择）
 		const UI_FONT_OPTIONS = [
@@ -529,15 +530,15 @@ window.__ModuleLoader__.load({
 			Object.assign(btnOpenTerm.style, {
 				border: "1px solid var(--dsw-alias-border-l2)",
 				background: "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))",
-				color: "var(--dsw-alias-label-secondary)", fontSize: "12px",
+				color: "var(--dsw-alias-label-primary)", fontSize: "12px", fontWeight: "700",   // 2026-09-05 加粗提亮
 				width: "100%", textAlign: "center",   // 2026-09-05 占满 HUD 内容宽并居中
 				padding: "5px 12px", borderRadius: "8px", cursor: "pointer",
 				fontFamily: "Consolas, monospace", lineHeight: "1.5",
 				transition: "background .12s",
 			});
 			btnOpenTerm.addEventListener("mousedown", (e) => e.stopPropagation()); // 防触发 HUD 拖动
-			btnOpenTerm.addEventListener("mouseenter", () => { btnOpenTerm.style.background = "var(--dsw-alias-interactive-bg-hover)"; btnOpenTerm.style.color = "var(--dsw-alias-label-primary)"; });
-			btnOpenTerm.addEventListener("mouseleave", () => { btnOpenTerm.style.background = "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))"; btnOpenTerm.style.color = "var(--dsw-alias-label-secondary)"; });
+			btnOpenTerm.addEventListener("mouseenter", () => { btnOpenTerm.style.background = "var(--dsw-alias-interactive-bg-hover)"; });
+			btnOpenTerm.addEventListener("mouseleave", () => { btnOpenTerm.style.background = "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))"; });
 			btnOpenTerm.addEventListener("click", (e) => {
 				e.stopPropagation();
 				if (termPanel.root.style.display === "none") {
