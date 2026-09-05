@@ -1805,53 +1805,42 @@ window.__ModuleLoader__.load({
 			function rebind() {
 				const sid = currentSessionId();
 				if (sid === sessionId && binding) return;
-				// 会话切换：退订旧会话订阅，重新绑定新会话
+				// 会话切换：重新绑定会话（新版无 subscribe/getSnapshot 订阅 → DOM 驱动同步）
 				if (unsubscribe) { try { unsubscribe(); } catch (e) {} unsubscribe = null; }
 				sessionId = sid;
 				if (sid === null) { binding = null; userMsgs = []; rows = []; renderRows(); return; }
 				userMsgs = [];
 				rows = [];
 				try { binding = sessions.binding(sid); } catch (e) { binding = null; }
-				if (binding && binding.session && binding.session.subscribe) {
-					try { unsubscribe = binding.session.subscribe(onSessionEvent); } catch (e) {}
-				}
 				renderRows();
-				// 快照全量同步（含全部历史，按时间序；重启后对话区自动加载历史，快照=全部）
-				onSessionEvent();
+				// 会话内容异步渲染 → 延迟多次 DOM 同步兜底
+				setTimeout(syncFromDom, 150);
+				setTimeout(syncFromDom, 600);
+				setTimeout(syncFromDom, 1500);
 			}
 
-			// 快照全量同步：快照 = 对话区已加载全部消息。用官方 chat.order（渲染顺序 key 列表）
-			// + chat.nodes（key→节点）：user 消息按 order 序收集 {text, key}，整体替换列表。
-			// key 是官方唯一锚点（DOM data-chat-anchor-key），跳转用 key 定位，零文本匹配。
-			function onSessionEvent() {
-				if (!binding || !binding.session) return;
-				let list = [];
-				let snapHasMore = false;
-				try {
-					const snap = binding.session.getSnapshot();
-					snapHasMore = !!(snap && snap.hasMore);
-					const chat = (snap && snap.chat) || null;
-					const order = chat && chat.order;
-					const nodes = chat && chat.nodes;
-					if (Array.isArray(order) && nodes && typeof nodes.get === "function") {
-						for (const key of order) {
-							const node = nodes.get(key);
-							if (!node) continue;
-							if (node.kind !== "user" && node.kind !== "steering") continue;
-							const t = nodeTextOf(node);
-							if (!t) continue;
-							list.push({ text: t, key });
-						}
-					}
-				} catch (e) { return; }
-				// 整体替换（key 去重）
+			// ---- DOM 同步（2026-09-05 最小修复：新版 dsh 0.1.2-rc.1 移除快照 API
+			//      getSnapshot()，旧实现收不到任何消息 → 横杠空。改直接扫描对话区
+			//      已渲染的我的消息行（data-chat-anchor-key + data-chat-flow-kind=user/steering），
+			//      文本行内提取，key=官方锚点。范围 = 官方懒加载窗口（更早历史受
+			//      0.1.2-rc.1 官方分页缺陷限制：滚动两次即停/rail 同点不动，待官方修复）。----
+			function syncFromDom() {
+				const root = findChatRoot();
+				if (!root) return;
 				const next = [];
 				const seen = new Set();
-				for (const m of list) {
-					if (seen.has(m.key)) continue;
-					seen.add(m.key);
-					next.push(m);
+				const els = root.querySelectorAll('[data-chat-anchor-key]');
+				for (const el of els) {
+					const k = el.getAttribute("data-chat-anchor-key");
+					if (!k || seen.has(k)) continue;
+					const kind = el.getAttribute("data-chat-flow-kind");
+					if (kind !== "user" && kind !== "steering") continue;
+					seen.add(k);
+					const t = rowTextOf(el);
+					if (!t) continue;
+					next.push({ text: t, key: k });
 				}
+				// 整体替换（key 序比对，变了才重建行）
 				let changed = next.length !== userMsgs.length;
 				if (!changed) {
 					for (let i = 0; i < next.length; i++) {
@@ -1863,11 +1852,10 @@ window.__ModuleLoader__.load({
 					renderRows();
 				}
 				rebuildRowMap();
-				// 加载历史期间隐藏行号（序号整体前移会跳），加载完成（hasMore=false）再显示
-				numHiddenByLoad = !!snapHasMore;
+				// 加载历史期间隐藏行号（序号整体前移会跳）
+				const bs = binding && binding.session ? binding.session : null;
+				numHiddenByLoad = !!(bs && bs.hasMore);
 				updateExpanded(expanded);
-				// 还有更早历史 → 继续加载（loadOlder 分页；DOM 变化会再触发 sync）
-				if (snapHasMore) maybeLoadOlder();
 			}
 
 			// key → DOM 行索引：数据/DOM 变化时重建。key 是官方锚点（data-chat-anchor-key），
@@ -1898,17 +1886,24 @@ window.__ModuleLoader__.load({
 				// 目标还没出现 → 继续触发"加载更早"（有更早按钮且非加载中）
 				if (pendingTarget) maybeLoadOlder();
 			}
-			// 从快照节点提取首行文本（参考 dsh-chat-outline：文本在 node.data.content）
-			function nodeTextOf(node) {
-				if (!node) return "";
-				const blocks = (node.data && node.data.content) || node.content || node.blocks || [];
-				let text = "";
-				for (const b of blocks) {
-					if ((b.type === "text" || b.kind === "text") && typeof b.text === "string") {
-						text += b.text + "\n";
+			// 从 DOM 消息行提取首行文本（排除按钮/图标/aria-hidden 操作区等 UI 噪音）
+			function rowTextOf(el) {
+				if (!el) return "";
+				try {
+					const parts = [];
+					const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+					let n;
+					while ((n = walker.nextNode())) {
+						const p = n.parentElement;
+						if (!p || !p.closest) continue;
+						if (p.closest('button,svg,[aria-hidden="true"],time,style,script')) continue;
+						const v = (n.textContent || "").trim();
+						if (v) parts.push(v);
 					}
+					return parts.join(" ").replace(/\s+/g, " ").trim().slice(0, 160);
+				} catch (e) {
+					return (el.textContent || "").replace(/\s+/g, " ").trim().slice(0, 160);
 				}
-				return text.trim().split("\n", 1)[0] || "";
 			}
 			// 触发对话区"加载更早"（懒加载历史）：优先走官方 binding.session.loadOlder()
 			// 编程式分页加载（dsh 官方 ChatView 按钮同机制），节流防止连点。
@@ -1939,7 +1934,7 @@ window.__ModuleLoader__.load({
 				if (!root || rowObserver) return;
 				rowObserver = new MutationObserver(() => {
 					clearTimeout(rebuildTimer);
-					rebuildTimer = setTimeout(rebuildRowMap, 150);
+					rebuildTimer = setTimeout(syncFromDom, 150);
 				});
 				rowObserver.observe(root, { childList: true, subtree: true });
 			}
@@ -2152,7 +2147,7 @@ window.__ModuleLoader__.load({
 			// 等对话区渲染后定位 + 建立尺寸跟踪（2026-08-27 主需求：新客户端即时显示、侧边栏宽度变化跟随）
 			ensureOutlineTracking();
 			ensureRowObserver();
-			rebuildRowMap();
+			syncFromDom();
 			// ---- 视口跟随：对话区滚动时同步 activeIdx（事件驱动+节流，非轮询；
 			//      点跳转已在 scrollToMessage 里直接设 activeIdx） ----
 			function syncActiveFromView() {
