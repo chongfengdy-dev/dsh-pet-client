@@ -50,8 +50,6 @@ window.__ModuleLoader__.load({
 			{ name: "Cascadia Mono", value: '"Cascadia Mono", monospace' },
 			{ name: "JetBrains Mono", value: '"JetBrains Mono", Consolas, monospace' },
 		];
-		const UI_FONT_KEY = "dsh-ui-font";
-		const UI_FONT_SIZE_KEY = "dsh-ui-font-size";   // 界面字号（基准 14）
 		// 界面字体应用（注入 CSS 覆盖字体变量；空值恢复系统默认）
 		function applyUiFont(value) {
 			let st = document.getElementById("dsh-ui-font-style");
@@ -63,7 +61,7 @@ window.__ModuleLoader__.load({
 			st.textContent = value
 				? ":root{--dsw-font-family:" + value + " !important;--ds-font-family-code:" + value + " !important}"
 					+ "body{font-family:" + value + " !important}"
-					+ "#" + HUD_ID + ",#" + HUD_ID + " span{font-family:" + value + " !important}"   // 2026-09-05 HUD（含数字列）字体跟随设置
+					+ "#" + HUD_ID + ",#" + HUD_ID + " span,#" + HUD_ID + " button{font-family:" + value + " !important}"   // 2026-09-05 HUD（含数字列/终端按钮）字体跟随设置
 				: "";
 		}
 		// 界面字号应用（缩放比例 = 字号/基准14；2026-08-27 主需求）
@@ -71,15 +69,6 @@ window.__ModuleLoader__.load({
 		function applyUiFontSize(size) {
 			const z = size > 0 ? (size / 14) : 1;
 			document.documentElement.style.zoom = String(Math.round(z * 1000) / 1000);
-		}
-		// 读取并应用持久化界面字体/字号（启动时调用）
-		function initUiFont() {
-			try {
-				const savedFont = localStorage.getItem(UI_FONT_KEY);
-				if (savedFont) applyUiFont(savedFont);
-				const savedSize = parseInt(localStorage.getItem(UI_FONT_SIZE_KEY) || "", 10);
-				if (savedSize > 0) applyUiFontSize(savedSize);
-			} catch (e) {}
 		}
 
 		// 终端宿主/状态提升到模块顶层（2026-08-19：版本更新提示的 typeSudoRestart 在 apply 外需访问）
@@ -141,11 +130,10 @@ window.__ModuleLoader__.load({
 					termSettingsPanel.style.display === "none" ? "block" : "none";
 			});
 			termPanel.root.appendChild(settingsBtn);
-			// ---------- 界面字体（系统字库枚举 + 选择即应用；2026-08-27 主需求：放入设置面板） ----------
-			let uiFont = "";
-			try { uiFont = localStorage.getItem(UI_FONT_KEY) || ""; } catch (e) {}
-			let uiFontSize = 14;   // 界面字号（基准 14；2026-08-27 主需求，滑杆调整）
-			try { const s = parseInt(localStorage.getItem(UI_FONT_SIZE_KEY) || "", 10); if (s > 0) uiFontSize = s; } catch (e) {}
+			// ---------- 界面字体（系统字库枚举 + 选择即应用；2026-08-27 主需求：放入设置面板）
+			// 2026-09-05 并入 termSettings（服务端持久化，客户端重启可记住） ----------
+			let uiFont = termSettings.uiFont || "";
+			let uiFontSize = termSettings.uiFontSize || 14;
 			let sysFonts = null;   // 系统字体列表（懒加载缓存）
 			async function loadSystemFonts() {
 				if (sysFonts) return sysFonts;
@@ -169,8 +157,9 @@ window.__ModuleLoader__.load({
 			}
 			function pickFont(value) {
 				uiFont = value;
-				try { localStorage.setItem(UI_FONT_KEY, uiFont); } catch (err) {}
+				termSettings.uiFont = value;
 				applyUiFont(uiFont);
+				applyTermSettings();   // 2026-09-05 持久化到服务端 + 已开 xterm 同步字体
 			}
 			// ---------- 设置页"界面字体" section（React 正规注册，同 dshmarket 方案；2026-08-27 主需求） ----------
 			function buildSettingsFontEntry() {
@@ -196,8 +185,10 @@ window.__ModuleLoader__.load({
 						const SIZE_OPTS = [12, 13, 14, 15, 16, 17, 18, 19, 20];
 						const range = React.createElement("select", {
 							value: String(size),
-							onChange: (e) => { const v = parseInt(e.target.value, 10); setSize(v); applyUiFontSize(v);
-								try { localStorage.setItem(UI_FONT_SIZE_KEY, String(v)); } catch (err) {} },
+							onChange: (e) => { const v = parseInt(e.target.value, 10); setSize(v); uiFontSize = v;
+								termSettings.uiFontSize = v;
+								applyUiFontSize(v);
+								saveTermSettings(termSettings); },
 							style: { width: "100%", padding: "7px 10px", borderRadius: "8px",
 								border: "1px solid var(--dsw-alias-border-l2)",
 								background: "var(--dsw-alias-bg-layer-2)",
@@ -439,6 +430,12 @@ window.__ModuleLoader__.load({
 					bgImgLayer = null;
 				}
 			};
+			// xterm 字体：界面字体非空则跟随界面设置（2026-09-05 主定：终端内部也应用客户端字体）
+			function resolveTermFont() {
+				return uiFont && typeof uiFont === "string" && uiFont.length > 0
+					? uiFont
+					: (TERM_FONTS[termSettings.fontIdx] || TERM_FONTS[0]).value;
+			}
 			// 应用设置：termHost 背景 = 自定义色×透明度 + 图片层（可选，xterm 背景透明）
 			const applyTermSettings = () => {
 				saveTermSettings(termSettings);
@@ -446,7 +443,7 @@ window.__ModuleLoader__.load({
 				updateBgImage();
 				if (!termState.term) return;
 				termState.term.options.fontSize = termSettings.fontSize;
-				termState.term.options.fontFamily = TERM_FONTS[termSettings.fontIdx].value;
+				termState.term.options.fontFamily = resolveTermFont();
 				termState.term.options.theme = termTheme();
 				if (termState.fit) termState.fit.fit();
 				sendResize(termState);
@@ -465,6 +462,9 @@ window.__ModuleLoader__.load({
 					if (typeof s.fontIdx === "number") termSettings.fontIdx = s.fontIdx;
 					if (typeof s.bgImage === "string") termSettings.bgImage = s.bgImage;
 					if (typeof s.bgImageAlpha === "number") termSettings.bgImageAlpha = s.bgImageAlpha;
+					// 2026-09-05 界面字体/字号随服务端恢复（客户端重启可记住）
+					if (typeof s.uiFont === "string") termSettings.uiFont = s.uiFont;
+					if (typeof s.uiFontSize === "number") termSettings.uiFontSize = s.uiFontSize;
 					if (st.geom && st.geom.w >= 320 && st.geom.h >= 200) {
 						const g = st.geom;
 						termPanel.root.style.width = g.w + "px";
@@ -475,6 +475,11 @@ window.__ModuleLoader__.load({
 						termPanel.root.style.transform = "";
 					}
 					syncImgUI();
+					// 服务端权威恢复后，应用界面字体/字号（覆盖 localStorage 初值）
+					uiFont = termSettings.uiFont || "";
+					uiFontSize = termSettings.uiFontSize || 14;
+					if (uiFont) applyUiFont(uiFont);
+					applyUiFontSize(uiFontSize);
 					applyTermSettings();
 				})
 				.catch(() => {});
@@ -553,8 +558,9 @@ window.__ModuleLoader__.load({
 			// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时屏幕中央提示） ----------
 			buildZoomHud();
 
-			// ---------- 应用持久化界面字体（字型选择，2026-08-27） ----------
-			initUiFont();
+			// ---------- 应用界面字体/字号（以服务端 term-state 为权威，客户端重启可记住；fetch 恢复后再覆盖一次） ----------
+			if (uiFont) applyUiFont(uiFont);
+			applyUiFontSize(uiFontSize || 14);
 
 			// ---------- 鼠标手势（右键：上拖到顶/下拖到底/先上后下刷新） ----------
 			buildMouseGesture();
@@ -721,7 +727,8 @@ window.__ModuleLoader__.load({
 		// ---------- 终端设置存取（字号/字体，localStorage） ----------
 		function loadTermSettings() {
 			// 默认设置（主 2026-08-16 定稿：深色 #0d1117、透明度 60%、字号 16、Consolas）
-			let s = { bg: "#0d1117", alpha: 60, fontSize: 16, fontIdx: 0, bgImage: "", bgImageAlpha: 100 };
+			// 2026-09-05 界面字体/字号并入本对象（与服务端持久化同通道，WebView2 localStorage 不可靠）
+			let s = { bg: "#0d1117", alpha: 60, fontSize: 16, fontIdx: 0, bgImage: "", bgImageAlpha: 100, uiFont: "", uiFontSize: 14 };
 			try {
 				const raw = JSON.parse(localStorage.getItem(TERM_SETTINGS_KEY) || "null");
 				if (raw) {
@@ -731,6 +738,8 @@ window.__ModuleLoader__.load({
 					if (typeof raw.fontIdx === "number") s.fontIdx = raw.fontIdx;
 					if (typeof raw.bgImage === "string") s.bgImage = raw.bgImage;
 					if (typeof raw.bgImageAlpha === "number") s.bgImageAlpha = raw.bgImageAlpha;
+					if (typeof raw.uiFont === "string") s.uiFont = raw.uiFont;
+					if (typeof raw.uiFontSize === "number") s.uiFontSize = raw.uiFontSize;
 				}
 			} catch (e) {}
 			return s;
