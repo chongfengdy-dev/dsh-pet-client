@@ -1653,7 +1653,7 @@ window.__ModuleLoader__.load({
 				const v = document.createElement("span");
 				v.style.fontFamily = 'Consolas, monospace';
 				v.style.color = valueColor || "var(--dsw-alias-label-primary)";
-				v.style.textAlign = "right";
+				v.style.textAlign = "left";   // 2026-09-05 数字列左对齐：起点统一成一线
 				v.style.whiteSpace = "nowrap";
 				v.textContent = value;
 				const c = document.createElement("span");
