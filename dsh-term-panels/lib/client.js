@@ -430,12 +430,7 @@ window.__ModuleLoader__.load({
 					bgImgLayer = null;
 				}
 			};
-			// xterm 字体：界面字体非空则跟随界面设置（2026-09-05 主定：终端内部也应用客户端字体）
-			function resolveTermFont() {
-				return uiFont && typeof uiFont === "string" && uiFont.length > 0
-					? uiFont
-					: (TERM_FONTS[termSettings.fontIdx] || TERM_FONTS[0]).value;
-			}
+			// 2026-09-05 主更正：终端（xterm 内容）保持自己的字体设置（⚙ 面板 fontIdx 选择），不随界面字体
 			// 应用设置：termHost 背景 = 自定义色×透明度 + 图片层（可选，xterm 背景透明）
 			const applyTermSettings = () => {
 				saveTermSettings(termSettings);
@@ -443,7 +438,7 @@ window.__ModuleLoader__.load({
 				updateBgImage();
 				if (!termState.term) return;
 				termState.term.options.fontSize = termSettings.fontSize;
-				termState.term.options.fontFamily = resolveTermFont();
+				termState.term.options.fontFamily = TERM_FONTS[termSettings.fontIdx].value;
 				termState.term.options.theme = termTheme();
 				if (termState.fit) termState.fit.fit();
 				sendResize(termState);
