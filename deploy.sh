@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# DSH-Pet-Client v2.1.4 — WSL 一键部署
+# DSH-Pet-Client v2.1.5 — WSL 一键部署
 # 跑一遍 = 安装 + 配置 + systemd 服务自启 + 重启 WSL（之后 Windows 双击 exe 即用）
 # 用法：bash deploy.sh
 set -e
@@ -8,7 +8,7 @@ PKG_DIR="$(cd "$(dirname "$0")" && pwd)"
 USER_NAME="$(whoami)"
 
 echo "=============================================="
-echo " DSH-Pet-Client v2.1.4 WSL 部署"
+echo " DSH-Pet-Client v2.1.5 WSL 部署"
 echo " 包目录: $PKG_DIR"
 echo "=============================================="
 
@@ -45,9 +45,12 @@ npm install
 cd "$PKG_DIR"
 
 echo ""
-echo "== 5/6 安装 dsh-term-panels 插件 =="
+echo "== 5/6 安装前端插件（终端面板 + token 自动同步）=="
 dsh plugin --profile web add "$PKG_DIR/dsh-term-panels" 2>/dev/null || \
   dsh plugin --profile web add "$PKG_DIR/dsh-term-panels"
+echo "[信息] 安装 dsh-web-token-sync（dsh web 每次启动自动写最新 token 到客户端目录，客户端免手动认证）..."
+dsh plugin --profile web add "$PKG_DIR/dsh-web-token-sync" 2>/dev/null || \
+  dsh plugin --profile web add "$PKG_DIR/dsh-web-token-sync"
 
 echo ""
 echo "== 6/6 配置 systemd 服务（自启）=="
