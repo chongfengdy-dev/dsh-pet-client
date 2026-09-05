@@ -1169,9 +1169,18 @@ window.__ModuleLoader__.load({
 			const head = document.createElement("div");
 			Object.assign(head.style, {
 				display: "flex", alignItems: "center", gap: "6px",
-				padding: "7px 10px", cursor: "pointer",
+				padding: "7px 10px", cursor: "pointer", borderRadius: "8px",
 				color: "var(--dsw-alias-label-secondary)",
 				fontSize: "14px", fontWeight: "600",
+			});
+			// 标题行 hover：高亮背景 + 阴影（2026-09-01 主需求：已归档会话这一行滑过也要有阴影）
+			head.addEventListener("mouseenter", () => {
+				head.style.background = "var(--dsw-alias-interactive-bg-hover)";
+				head.style.boxShadow = "0 1px 3px rgba(0,0,0,.12)";
+			});
+			head.addEventListener("mouseleave", () => {
+				head.style.background = "transparent";
+				head.style.boxShadow = "none";
 			});
 			const chevron = document.createElement("span");
 			chevron.textContent = "▸";
@@ -1249,7 +1258,7 @@ window.__ModuleLoader__.load({
 						height: "32px", padding: "0 8px", borderRadius: "8px",
 						cursor: "pointer", color: "var(--dsw-alias-label-primary)",
 					});
-					// hover：高亮背景 + 轻阴影（对齐原版会话行交互）
+					// hover：高亮背景 + 轻阴影（对齐原版会话行交互，2026-08-27）
 					item.addEventListener("mouseenter", () => {
 						item.style.background = "var(--dsw-alias-interactive-bg-hover)";
 						item.style.boxShadow = "0 1px 3px rgba(0,0,0,.12)";
@@ -1355,11 +1364,13 @@ window.__ModuleLoader__.load({
 				rowMenuEl.appendChild(restore);
 				rowMenuEl.appendChild(del);
 				document.body.appendChild(rowMenuEl);
-				// 定位：按钮右下方（左缘对齐按钮左缘向下展开，对齐原版 Menu；空间不足向上弹）
+				// 定位：按钮右上方弹出（左缘对齐按钮右缘、向上展开），空间不足才向下；
+				// 用真实宽高计算，避免菜单高度写死导致底部超屏（2026-09-01 主需求修复）
 				const r = btn.getBoundingClientRect();
-				const mw = 164, mh = 34;
-				let left = r.left, top = r.bottom + 4;
-				if (top + mh > window.innerHeight - 8) top = r.top - mh - 4;
+				const rect = rowMenuEl.getBoundingClientRect();
+				const mw = rect.width, mh = rect.height;
+				let left = r.right + 4, top = r.top - mh - 4;
+				if (top < 8) top = r.bottom + 4;
 				if (left + mw > window.innerWidth - 8) left = window.innerWidth - mw - 8;
 				if (left < 8) left = 8;
 				rowMenuEl.style.left = left + "px";
@@ -1666,7 +1677,8 @@ window.__ModuleLoader__.load({
 			hud.grid.appendChild(row("未命中", fmt(hitTotal - hit), money(state.inputMissCost)));
 			hud.grid.appendChild(row("命中率", hitRate + "%", "—"));
 			hud.grid.appendChild(row("输出", fmt(state.output), money(state.outputCost)));
-			// 高峰/空闲状态：DeepSeek 峰谷定价（官网：高峰=北京时间 9:00-12:00、14:00-18:00，其余为空闲），高峰红色显示（主 2026-08-19 要求）
+			// 高峰/空闲状态：DeepSeek 峰谷定价（官网：工作日高峰=北京时间 9:00-12:00、14:00-18:00，
+			// 其余为空闲；2026-09-01 调价后周末全天为优惠/空闲时段），高峰红色显示（主 2026-08-19/09-01 要求）
 			const peak = isDeepSeekPeak();
 			hud.grid.appendChild(row("花费", peak ? "高峰" : "空闲", state.cost !== null ? "¥" + state.cost.toFixed(2) : "—", peak ? "#f85149" : undefined));
 			// 余额 < 5 元红色警示（主 2026-08-19 要求）
@@ -1680,10 +1692,13 @@ window.__ModuleLoader__.load({
 		}
 
 		// DeepSeek 峰谷定价判定（官网 api-docs.deepseek.com/zh-cn/quick_start/pricing 原文）：
-		// "高峰时段为北京时间 9:00 - 12:00、14:00 - 18:00（其余为空闲时段）"——无工作日限定，只看时刻。
+		// "高峰时段为北京时间 9:00 - 12:00、14:00 - 18:00（其余为空闲时段）"
+		// 2026-09-01 调价：周末全天为优惠/空闲时段（主确认）。
 		// 按北京时间（UTC+8，不依赖本机时区），高峰红色显示。
 		function isDeepSeekPeak() {
 			const bj = new Date(Date.now() + 8 * 3600 * 1000);
+			const day = bj.getUTCDay();   // 北京时间星期：0=周日 6=周六
+			if (day === 0 || day === 6) return false;   // 周末全天空闲（优惠价）
 			const minutes = bj.getUTCHours() * 60 + bj.getUTCMinutes();
 			return (minutes >= 9 * 60 && minutes < 12 * 60) || (minutes >= 14 * 60 && minutes < 18 * 60);
 		}
@@ -2080,8 +2095,12 @@ window.__ModuleLoader__.load({
 			}
 
 			// ---- DOM 定位（data-chat-flow-kind="user" 第 n 行 = 第 n 条我的消息） ----
+			// 2026-09-05 兼容 dsh 0.1.2-rc.1：新版 UI 把对话区滚动容器改为
+			// [data-conversation-scroll]（旧 [data-slot="conversation"] 已移除），
+			// 双选择器兼容新旧版；消息行锚点 data-chat-anchor-key 两版均保留。
 			function findChatRoot() {
-				return document.querySelector('[data-slot="conversation"]');
+				return document.querySelector('[data-slot="conversation"]')
+					|| document.querySelector('[data-conversation-scroll]');
 			}
 			function findScrollContainer(root) {
 				const first = root.querySelector("[data-chat-flow-kind]");
