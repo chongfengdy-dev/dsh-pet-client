@@ -1686,7 +1686,7 @@ window.__ModuleLoader__.load({
 			const hitTotal = state.inputHit !== undefined ? state.inputHit + state.inputMiss : state.input + state.cacheRead;
 			const hit = state.inputHit !== undefined ? state.inputHit : state.cacheRead;
 			const hitRate = hitTotal > 0 ? Math.round(hit / hitTotal * 100) : 0;
-			const money = (n) => (n !== undefined && n !== null ? "¥" + Number(n).toFixed(2) : "—");
+			const money = (n) => (n !== undefined && n !== null ? "¥" + Number(n).toFixed(1) : "—");
 			hud.grid.appendChild(row("命中", fmt(hit), money(state.inputHitCost)));
 			hud.grid.appendChild(row("未命中", fmt(hitTotal - hit), money(state.inputMissCost)));
 			hud.grid.appendChild(row("命中率", hitRate + "%", "—"));
@@ -1694,10 +1694,10 @@ window.__ModuleLoader__.load({
 			// 高峰/空闲状态：DeepSeek 峰谷定价（官网：工作日高峰=北京时间 9:00-12:00、14:00-18:00，
 			// 其余为空闲；2026-09-01 调价后周末全天为优惠/空闲时段），高峰红色显示（主 2026-08-19/09-01 要求）
 			const peak = isDeepSeekPeak();
-			hud.grid.appendChild(row("花费", peak ? "高峰" : "空闲", state.cost !== null ? "¥" + state.cost.toFixed(2) : "—", peak ? "#f85149" : undefined));
+			hud.grid.appendChild(row("花费", peak ? "高峰" : "空闲", state.cost !== null ? "¥" + state.cost.toFixed(1) : "—", peak ? "#f85149" : undefined));
 			// 余额 < 5 元红色警示（主 2026-08-19 要求）
 			const bal = state.balance !== null ? parseFloat(state.balance) : null;
-			hud.grid.appendChild(row("余额", "—", bal !== null ? "¥" + bal : "…", undefined, bal !== null && bal < 5 ? "#f85149" : undefined));
+			hud.grid.appendChild(row("余额", "—", bal !== null ? "¥" + Number(bal).toFixed(1) : "…", undefined, bal !== null && bal < 5 ? "#f85149" : undefined));
 		}
 		function fmt(n) {
 			if (n >= 1e6) return (n / 1e6).toFixed(1) + "M";
