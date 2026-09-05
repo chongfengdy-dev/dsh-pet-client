@@ -1593,7 +1593,7 @@ window.__ModuleLoader__.load({
 			root.id = HUD_ID;
 			Object.assign(root.style, {
 				position: "fixed", top: "14px", right: "14px", zIndex: "99992",
-				width: "160px", minWidth: "160px", boxSizing: "border-box",   // 2026-09-05 主调整：150 偏挤改 160
+				width: "170px", minWidth: "170px", boxSizing: "border-box",   // 2026-09-05 主调整：160→170
 				padding: "10px 12px",
 				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
@@ -1642,7 +1642,7 @@ window.__ModuleLoader__.load({
 				// 2026-09-05 主试调定稿：grid 列宽对齐——label 列宽取最长行、value 列随之对齐（上下对齐），金额列右贴
 				Object.assign(d.style, {
 					display: "grid",
-					gridTemplateColumns: "auto auto 1fr",
+					gridTemplateColumns: "42px auto 1fr",   // 2026-09-05 label 列固定 42px：各行数字起点统一
 					columnGap: "6px",
 					alignItems: "baseline",
 				});
