@@ -87,12 +87,12 @@ window.__ModuleLoader__.load({
 			const connection = ctx.connection;
 			if (document.getElementById(DOCK_ID)) return; // 已注入
 
-			// ---------- 悬浮终端按钮（贴对话区左下角；2026-09-05 右侧与官方气泡大纲重叠、
-			//      浏览器左下角与官方设置重叠 → 挂进对话区滚动容器左下，随容器不随页面） ----------
+			// ---------- 悬浮终端按钮（贴对话区可视区左下角；2026-09-05 右侧与官方气泡大纲、
+			//      页面左下与官方设置重叠 → 固定定位 + 实时跟随对话区位置，不写入对话区 DOM） ----------
 			const dock = document.createElement("div");
 			dock.id = DOCK_ID;
 			Object.assign(dock.style, {
-				position: "fixed", left: "16px", bottom: "20px", zIndex: "99990",
+				position: "fixed", zIndex: "99990",
 				display: "flex", flexDirection: "column", gap: "10px",
 			});
 			const btnTerm = dockButton(">_", "打开终端");
@@ -103,29 +103,23 @@ window.__ModuleLoader__.load({
 				return document.querySelector('[data-slot="conversation"]')
 					|| document.querySelector('[data-conversation-scroll]');
 			}
-			// 把 dock 移入对话区滚动容器（absolute 贴其左下角；容器重建连带销毁时自动重建重挂）
-			function remountTermDock() {
+			// fixed 定位贴对话区可视区左下角（44px 按钮 + 10px 边距）；无对话区时隐藏
+			function placeTermDock() {
 				const root = findConversationRoot();
-				if (!root) return;                       // 对话区未出现：dock 暂留 body 左下角
-				if (!dock.isConnected) {
-					const nb = dockButton(">_", "打开终端");
-					dock.innerHTML = "";
-					dock.appendChild(nb);
-					document.body.appendChild(dock);
-				}
-				if (root.contains(dock)) return;
-				try { if (getComputedStyle(root).position === "static") root.style.position = "relative"; } catch (e) {}
-				root.appendChild(dock);
-				Object.assign(dock.style, {
-					position: "absolute", left: "10px", bottom: "10px",
-					top: "auto", right: "auto", transform: "none",
-				});
+				if (!root) { dock.style.display = "none"; return; }
+				let r = null;
+				try { r = root.getBoundingClientRect(); } catch (e) {}
+				if (!r || r.width <= 0 || r.height <= 0) { dock.style.display = "none"; return; }
+				dock.style.display = "flex";
+				dock.style.left = Math.max(8, r.left + 10) + "px";
+				dock.style.top = Math.max(8, r.bottom - 10 - 44) + "px";
+				dock.style.bottom = "auto";
+				dock.style.right = "auto";
+				dock.style.transform = "none";
 			}
-			remountTermDock();
-			try {
-				// 对话区渲染/重建由 React 驱动 → 观察 body 子树的挂载变化，自动跟随
-				new MutationObserver(() => remountTermDock()).observe(document.body, { childList: true, subtree: true });
-			} catch (e) {}
+			placeTermDock();
+			setInterval(placeTermDock, 300);   // 布局/侧栏折叠等变化跟随（轻量 rect 查询）
+			window.addEventListener("resize", placeTermDock);
 
 			// ---------- 终端面板（内嵌 xterm，直连 3081；可拖拽 + 可调大小，记忆几何） ----------
 			const termPanel = panel(TERM_PANEL_ID, ">_ 终端");
