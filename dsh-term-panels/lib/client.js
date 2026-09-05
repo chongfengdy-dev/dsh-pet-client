@@ -65,17 +65,10 @@ window.__ModuleLoader__.load({
 				: "";
 		}
 		// 界面字号应用（缩放比例 = 字号/基准14；2026-08-27 主需求）
-		// 2026-09-05 主定：HUD 固定字号——页面缩放时给 HUD 反向补偿，不随界面字号变
+		// 2026-09-05 主定：HUD 随字号设置同步缩放（与页面一致，两侧设置相同即一致）
 		function applyUiFontSize(size) {
 			const z = size > 0 ? (size / 14) : 1;
 			document.documentElement.style.zoom = String(Math.round(z * 1000) / 1000);
-			try {
-				const hudEl = document.getElementById(HUD_ID);
-				if (!hudEl) return;
-				hudEl.style.zoom = Math.abs(z - 1) > 0.001
-					? String(Math.round(1 / z * 1000) / 1000)   // 反向补偿 → 视觉恒定为原字号
-					: "";
-			} catch (e) {}
 		}
 		// 读取并应用持久化界面字体/字号（启动时调用）
 		function initUiFont() {
