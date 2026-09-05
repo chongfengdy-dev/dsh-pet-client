@@ -4,8 +4,8 @@ After=network-online.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/dream
-ExecStart=/usr/bin/node /home/dream/.npm-global/bin/dsh --profile wechat
+WorkingDirectory=/home/<USER>
+ExecStart=/usr/bin/node /home/<USER>/.npm-global/bin/dsh --profile wechat
 Restart=always
 RestartSec=5
 
