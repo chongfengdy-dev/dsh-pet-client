@@ -1593,7 +1593,7 @@ window.__ModuleLoader__.load({
 			root.id = HUD_ID;
 			Object.assign(root.style, {
 				position: "fixed", top: "14px", right: "14px", zIndex: "99992",
-				width: "170px", minWidth: "170px", boxSizing: "border-box",   // 2026-09-05 主调整：160→170
+				width: "180px", minWidth: "180px", boxSizing: "border-box",   // 2026-09-05 主调整：160→170
 				padding: "10px 12px",
 				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
