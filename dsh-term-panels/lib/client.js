@@ -527,7 +527,8 @@ window.__ModuleLoader__.load({
 				border: "1px solid var(--dsw-alias-border-l2)",
 				background: "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))",
 				color: "var(--dsw-alias-label-secondary)", fontSize: "12px",
-				padding: "4px 12px", borderRadius: "8px", cursor: "pointer",
+				width: "100%", textAlign: "center",   // 2026-09-05 占满 HUD 内容宽并居中
+				padding: "5px 12px", borderRadius: "8px", cursor: "pointer",
 				fontFamily: "Consolas, monospace", lineHeight: "1.5",
 				transition: "background .12s",
 			});
@@ -1638,25 +1639,22 @@ window.__ModuleLoader__.load({
 			// 列布局用 CSS grid（grid 容器已设 grid-template-columns: 1fr auto auto）
 			const row = (label, value, cost, valueColor, costColor) => {
 				const d = document.createElement("div");
-				// 2026-09-05 主试调后定稿：回三列（1fr auto auto），160px 宽 + 压缩列距/金额列适配
+				// 2026-09-05 主试调：label 自然宽 + value 紧跟其后（数据左移），金额右推贴边
 				Object.assign(d.style, {
-					display: "grid",
-					gridTemplateColumns: "1fr auto auto",
-					columnGap: "6px",
-					alignItems: "baseline",
+					display: "flex", alignItems: "baseline", gap: "6px",
 				});
 				const l = document.createElement("span");
 				l.style.color = "var(--dsw-alias-label-tertiary)";
+				l.style.whiteSpace = "nowrap";
 				l.textContent = label;
 				const v = document.createElement("span");
 				v.style.fontFamily = 'Consolas, monospace';
 				v.style.color = valueColor || "var(--dsw-alias-label-primary)";
-				v.style.textAlign = "right";
 				v.textContent = value;
 				const c = document.createElement("span");
 				c.style.fontFamily = 'Consolas, monospace';
 				c.style.color = costColor || "var(--dsw-alias-label-primary)";
-				c.style.textAlign = "right";
+				c.style.marginLeft = "auto";   // 金额右推贴边
 				c.style.minWidth = "38px";
 				c.textContent = cost;
 				d.appendChild(l);
