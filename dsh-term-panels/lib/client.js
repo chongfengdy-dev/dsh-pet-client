@@ -98,18 +98,29 @@ window.__ModuleLoader__.load({
 			const btnTerm = dockButton(">_", "打开终端");
 			dock.appendChild(btnTerm);
 			document.body.appendChild(dock);
-			// 对话区根（新版 [data-conversation-scroll]；旧版 [data-slot="conversation"]）
+			// 对话区根（依次尝试：旧版容器 / 新版滚动容器 / 官方对话列）
 			function findConversationRoot() {
 				return document.querySelector('[data-slot="conversation"]')
-					|| document.querySelector('[data-conversation-scroll]');
+					|| document.querySelector('[data-conversation-scroll]')
+					|| document.querySelector('[data-chat-flow]')
+					|| null;
 			}
-			// fixed 定位贴对话区可视区左下角（44px 按钮 + 10px 边距）；无对话区时隐藏
+			// fixed 定位贴对话区可视区左下角（44px 按钮 + 10px 边距）；找不到时隐藏并诊断一次
 			function placeTermDock() {
 				const root = findConversationRoot();
-				if (!root) { dock.style.display = "none"; return; }
 				let r = null;
-				try { r = root.getBoundingClientRect(); } catch (e) {}
-				if (!r || r.width <= 0 || r.height <= 0) { dock.style.display = "none"; return; }
+				if (root) { try { r = root.getBoundingClientRect(); } catch (e) {} }
+				if (!root || !r || r.width <= 0 || r.height <= 0) {
+					if (!dock.__warned) {
+						dock.__warned = true;
+						console.log("[dsh-panels] dock: 对话区容器未找到。候选计数：",
+							"data-slot=conversation:", document.querySelectorAll('[data-slot="conversation"]').length,
+							"data-conversation-scroll:", document.querySelectorAll('[data-conversation-scroll]').length,
+							"data-chat-flow:", document.querySelectorAll('[data-chat-flow]').length);
+					}
+					dock.style.display = "none";
+					return;
+				}
 				dock.style.display = "flex";
 				dock.style.left = Math.max(8, r.left + 10) + "px";
 				dock.style.top = Math.max(8, r.bottom - 10 - 44) + "px";
