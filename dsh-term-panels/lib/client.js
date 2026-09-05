@@ -36,6 +36,48 @@ window.__ModuleLoader__.load({
 			{ name: "宋体", value: "SimSun, monospace" },
 			{ name: "微软雅黑", value: '"Microsoft YaHei", monospace' },
 		];
+		// 界面字体选项（覆盖 dsh 的 --dsw-font-family；2026-08-27 主需求：字型选择）
+		const UI_FONT_OPTIONS = [
+			{ name: "系统默认", value: "" },
+			{ name: "微软雅黑", value: '"Microsoft YaHei", "微软雅黑", sans-serif' },
+			{ name: "宋体", value: '"SimSun", "宋体", serif' },
+			{ name: "黑体", value: '"SimHei", "黑体", sans-serif' },
+			{ name: "楷体", value: '"KaiTi", "楷体", serif' },
+			{ name: "霞鹜文楷", value: '"LXGW WenKai", "霞鹜文楷", "KaiTi", serif' },
+			{ name: "苹方", value: '"PingFang SC", "苹方", sans-serif' },
+			{ name: "思源黑体", value: '"Noto Sans CJK SC", "Source Han Sans SC", sans-serif' },
+			{ name: "Consolas", value: '"Consolas", monospace' },
+			{ name: "Cascadia Mono", value: '"Cascadia Mono", monospace' },
+			{ name: "JetBrains Mono", value: '"JetBrains Mono", Consolas, monospace' },
+		];
+		const UI_FONT_KEY = "dsh-ui-font";
+		const UI_FONT_SIZE_KEY = "dsh-ui-font-size";   // 界面字号（基准 14）
+		// 界面字体应用（注入 CSS 覆盖字体变量；空值恢复系统默认）
+		function applyUiFont(value) {
+			let st = document.getElementById("dsh-ui-font-style");
+			if (!st) {
+				st = document.createElement("style");
+				st.id = "dsh-ui-font-style";
+				document.head.appendChild(st);
+			}
+			st.textContent = value
+				? ":root{--dsw-font-family:" + value + " !important;--ds-font-family-code:" + value + " !important}body{font-family:" + value + " !important}"
+				: "";
+		}
+		// 界面字号应用（缩放比例 = 字号/基准14；2026-08-27 主需求）
+		function applyUiFontSize(size) {
+			const z = size > 0 ? (size / 14) : 1;
+			document.documentElement.style.zoom = String(Math.round(z * 1000) / 1000);
+		}
+		// 读取并应用持久化界面字体/字号（启动时调用）
+		function initUiFont() {
+			try {
+				const savedFont = localStorage.getItem(UI_FONT_KEY);
+				if (savedFont) applyUiFont(savedFont);
+				const savedSize = parseInt(localStorage.getItem(UI_FONT_SIZE_KEY) || "", 10);
+				if (savedSize > 0) applyUiFontSize(savedSize);
+			} catch (e) {}
+		}
 
 		// 终端宿主/状态提升到模块顶层（2026-08-19：版本更新提示的 typeSudoRestart 在 apply 外需访问）
 		const termHost = document.createElement("div");
@@ -101,6 +143,89 @@ window.__ModuleLoader__.load({
 					termSettingsPanel.style.display === "none" ? "block" : "none";
 			});
 			termPanel.root.appendChild(settingsBtn);
+			// ---------- 界面字体（系统字库枚举 + 选择即应用；2026-08-27 主需求：放入设置面板） ----------
+			let uiFont = "";
+			try { uiFont = localStorage.getItem(UI_FONT_KEY) || ""; } catch (e) {}
+			let uiFontSize = 14;   // 界面字号（基准 14；2026-08-27 主需求，滑杆调整）
+			try { const s = parseInt(localStorage.getItem(UI_FONT_SIZE_KEY) || "", 10); if (s > 0) uiFontSize = s; } catch (e) {}
+			let sysFonts = null;   // 系统字体列表（懒加载缓存）
+			async function loadSystemFonts() {
+				if (sysFonts) return sysFonts;
+				const names = [];
+				try {
+					if (window.queryLocalFonts) {
+						const fonts = await window.queryLocalFonts();
+						const seen = new Set();
+						for (const f of fonts) {
+							const family = (f.family || "").trim();
+							if (family && !seen.has(family)) { seen.add(family); names.push(family); }
+						}
+					}
+				} catch (e) { /* 权限拒绝/不支持 → 回退候选项 */ }
+				if (names.length === 0) {
+					for (const o of UI_FONT_OPTIONS) if (o.value) names.push(o.name);
+				}
+				names.sort((a, b) => a.localeCompare(b, "zh"));
+				sysFonts = names;
+				return names;
+			}
+			function pickFont(value) {
+				uiFont = value;
+				try { localStorage.setItem(UI_FONT_KEY, uiFont); } catch (err) {}
+				applyUiFont(uiFont);
+			}
+			// ---------- 设置页"界面字体" section（React 正规注册，同 dshmarket 方案；2026-08-27 主需求） ----------
+			function buildSettingsFontEntry() {
+				if (!React || !ctx.slots) return;
+				try {
+					// 字体设置 React 组件（闭包共享 applyUiFont/applyUiFontSize/loadSystemFonts）
+					function FontSection() {
+						const [font, setFont] = React.useState(uiFont);
+						const [size, setSize] = React.useState(uiFontSize);
+						const [fonts, setFonts] = React.useState([]);
+						React.useEffect(() => { loadSystemFonts().then((f) => setFonts(f)); }, []);
+						const sel = React.createElement("select", {
+							value: font,
+							onChange: (e) => { const v = e.target.value; setFont(v); pickFont(v); },
+							style: { width: "100%", padding: "7px 10px", borderRadius: "8px",
+								border: "1px solid var(--dsw-alias-border-l2)",
+								background: "var(--dsw-alias-bg-layer-2)",
+								color: "var(--dsw-alias-label-primary)", fontSize: "14px" },
+						}, React.createElement("option", { value: "" }, "系统默认"),
+							fonts.map((f) => React.createElement("option",
+								{ value: '"' + f + '", sans-serif', style: { fontFamily: '"' + f + '"' } }, f)));
+						// 字号下拉（同字型 UI，2026-08-27 主需求：滑动条不好操作改下拉）
+						const SIZE_OPTS = [12, 13, 14, 15, 16, 17, 18, 19, 20];
+						const range = React.createElement("select", {
+							value: String(size),
+							onChange: (e) => { const v = parseInt(e.target.value, 10); setSize(v); applyUiFontSize(v);
+								try { localStorage.setItem(UI_FONT_SIZE_KEY, String(v)); } catch (err) {} },
+							style: { width: "100%", padding: "7px 10px", borderRadius: "8px",
+								border: "1px solid var(--dsw-alias-border-l2)",
+								background: "var(--dsw-alias-bg-layer-2)",
+								color: "var(--dsw-alias-label-primary)", fontSize: "14px" },
+						}, SIZE_OPTS.map((n) => React.createElement("option", { value: String(n) }, n + " px")));
+						const preview = React.createElement("div",
+							{ style: { margin: "1px 0 22px", fontFamily: font || "system-ui, 'Segoe UI', sans-serif", fontSize: size + "px" } },
+							size + ": The quick brown fox jumps over the lazy dog");
+						const label = (txt) => React.createElement("div",
+							{ style: { fontSize: "13px", color: "var(--dsw-alias-label-secondary)", marginBottom: "8px" } }, txt);
+						const fontGroup = React.createElement("div", { style: { marginBottom: "22px" } }, label("字体"), sel);
+						const sizeGroup = React.createElement("div", null, label("字号"), range);
+						return React.createElement("div", null, fontGroup, preview, sizeGroup);
+					}
+					ctx.slots.inject("settings.section", () => {
+						const off = ctx.slots.register({
+							name: "settings.section",
+							id: "dsh-ui-font",
+							order: 45,
+							label: () => "界面",
+						}, () => React.createElement(FontSection));
+						return off;
+					});
+				} catch (e) { /* section 注册失败静默（不崩） */ }
+			}
+			buildSettingsFontEntry();
 			// 设置浮层（面板右上方）
 			const termSettingsPanel = document.createElement("div");
 			termSettingsPanel.id = "dsh-term-settings-panel";
@@ -405,6 +530,8 @@ window.__ModuleLoader__.load({
 			// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时屏幕中央提示） ----------
 			buildZoomHud();
 
+			// ---------- 应用持久化界面字体（字型选择，2026-08-27） ----------
+			initUiFont();
 
 			// ---------- 鼠标手势（右键：上拖到顶/下拖到底/先上后下刷新） ----------
 			buildMouseGesture();
