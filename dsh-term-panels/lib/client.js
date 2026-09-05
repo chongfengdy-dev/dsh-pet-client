@@ -1592,7 +1592,8 @@ window.__ModuleLoader__.load({
 			root.id = HUD_ID;
 			Object.assign(root.style, {
 				position: "fixed", top: "14px", right: "14px", zIndex: "99992",
-				minWidth: "190px", padding: "10px 12px",
+				width: "150px", minWidth: "150px", boxSizing: "border-box",   // 2026-09-05 主指示收窄到 150
+				padding: "10px 12px",
 				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
 				borderRadius: "10px",
@@ -1640,7 +1641,7 @@ window.__ModuleLoader__.load({
 				Object.assign(d.style, {
 					display: "grid",
 					gridTemplateColumns: "1fr auto auto",
-					columnGap: "10px",
+					columnGap: "6px",   // 2026-09-05 收窄 HUD 到 150 后压缩列距
 					alignItems: "baseline",
 				});
 				const l = document.createElement("span");
@@ -1655,7 +1656,7 @@ window.__ModuleLoader__.load({
 				c.style.fontFamily = 'Consolas, monospace';
 				c.style.color = costColor || "var(--dsw-alias-label-primary)";
 				c.style.textAlign = "right";
-				c.style.minWidth = "52px";
+				c.style.minWidth = "38px";   // 2026-09-05 收窄适配
 				c.textContent = cost;
 				d.appendChild(l);
 				d.appendChild(v);
