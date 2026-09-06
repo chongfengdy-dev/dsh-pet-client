@@ -1,0 +1,24 @@
+# 纯净 dsh：仅保留官方 base+web-app，disable 掉第三方插件。
+# 注意：保留 dsh-web-token-sync（token 同步小工具，不污染原版 UI，保证模式切换后客户端自动恢复认证）。
+- id: term-panels
+  disabled: true
+- id: dsh-market
+  disabled: true
+- id: mnemon-bundle
+  disabled: true
+- id: mnemon
+  disabled: true
+- id: mnemon-source-runtime
+  disabled: true
+- id: mnemon-source-documents
+  disabled: true
+- id: mnemon-source-memory-spaces
+  disabled: true
+- id: mnemon-strategy-default-three-tier
+  disabled: true
+- id: mnemon-strategy-auto-capture
+  disabled: true
+- id: mnemon-strategy-light-context
+  disabled: true
+- id: mnemon-strategy-scoped
+  disabled: true
