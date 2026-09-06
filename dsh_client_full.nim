@@ -297,6 +297,12 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
         discard ShowWindow(gFloatHwnd, SW_HIDE)
       result = 0
     of ID_TRAY_EXIT:
+      # v2.2 主需求：退出宠物时一并关闭 dsh 对话窗口(PWA)——投递 WM_CLOSE 后稍等
+      # 其处理，再退出本进程。注：若命中窗口是含 dsh 页面的浏览器标签窗口也会被关。
+      let dw = findDshWindow()
+      if dw != 0:
+        discard PostMessageW(dw, WM_CLOSE, 0, 0)
+        sleep(400)
       gQuitting = true
       gRunning = false
       discard Shell_NotifyIconW(NIM_DELETE, gTrayData.addr)
