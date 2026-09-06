@@ -94,7 +94,17 @@ app.post('/api/background', (req, res) => {
 // → 写 %USERPROFILE%\pet-ack.json {doneAt} 回执；server 见 ack.doneAt >= green.doneAt
 // → 转回 blue（主已看到回复）。ack 文件由 Nim 只写、server 只读。
 let petState = { pet: 'blue' };
-const GREEN_WINDOW_MS = 5 * 60 * 1000;   // 回复完成绿色提醒窗口：5 分钟内未确认仍提示，超时自动转蓝（纯净模式无页面 ack 的兜底）
+const GREEN_DONE_WINDOW_MS = 60 * 1000;  // 只对"最近 1 分钟内完成"的轮次发绿提醒（老轮次不误报）
+const GREEN_FLASH_MS = 12 * 1000;        // 绿色提醒时长：亮 12 秒自动转蓝——不依赖页面 ack
+let petGreenSetAt = 0;                   // 最近一次发绿时刻（自停计时基准）
+// 绿色自动熄灭定时器（事件驱动式短提醒：纯净模式无 term-panels 页面 ack 也能停，
+// 2026-09-06 主需求；完整模式页面 focus 上报 /api/pet-ack 仍是立即停的快速路径）
+setInterval(() => {
+  if (petState.pet === 'green' && Date.now() - petGreenSetAt > GREEN_FLASH_MS) {
+    petState = { pet: 'blue' };
+    writePetStateFile();
+  }
+}, 1000);
 function winUserHome() {
   // WSL 里解析 Windows 用户目录：/mnt/c/Users/<用户名>/（只取目录、排除系统内置与隐藏）
   try {
@@ -298,9 +308,9 @@ function runAskDetection() {
         if (r.asking) {
           petState = { pet: 'orange' };
         } else if (r.done && !(readPetAck() >= (r.doneAt || 0)) &&
-                   (!r.doneAt || Date.now() - r.doneAt <= GREEN_WINDOW_MS)) {
-          // 绿色仅在回复完成 GREEN_WINDOW_MS 内提醒；超时自动转蓝——
-          // 纯净模式无 term-panels 页面 ack，若无时间窗会永远绿（2026-09-06 主实测）
+                   (!r.doneAt || Date.now() - r.doneAt <= GREEN_DONE_WINDOW_MS)) {
+          // 绿色仅对"最近完成的轮次"发提醒；12 秒后由上方定时器自动转蓝
+          petGreenSetAt = Date.now();
           petState = { pet: 'green', doneAt: r.doneAt || Date.now() };
         } else {
           petState = { pet: 'blue' };
