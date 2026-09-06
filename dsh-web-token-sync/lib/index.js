@@ -10,7 +10,7 @@
 // 注意：不修改 dsh 本体任何代码，随 profile 加载；dsh 升级后若插件 API 变化
 // 只需对本插件做适配。
 
-import { mkdirSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import path from "node:path";
 
 /** 稳定插件名（cordis loader 用） */
@@ -40,19 +40,56 @@ function winUserHome() {
  * @param ctx - 插件上下文（inject 声明使 ctx.connection / ctx.webServer 可用）
  * @param config - 可选配置 { targetDir?: string }（默认 <Windows用户目录>/Desktop/DSH-Pet-Client）
  */
+/**
+ * 找桌面下所有 DSH 客户端运行目录（名字以 DSH-Pet-Client 开头且内含
+ * dsh_client_full.exe 的目录，兼容 v2.1.x 的 DSH-Pet-Client 与 v2.2 起的
+ * DSH-Pet-Client-v2.x 多版本并存），全部写入 token 文件——用户实际运行哪个
+ * 副本都能读到。2026-09-06 修复：原写死 Desktop/DSH-Pet-Client 导致 v2.2 目录
+ * 下的 exe 读不到 token。
+ */
+function clientDirs(home) {
+  const desktop = path.join(home, "Desktop");
+  try {
+    const out = [];
+    for (const name of readdirSync(desktop)) {
+      const p = path.join(desktop, name);
+      if (!name.startsWith("DSH-Pet-Client")) continue;
+      let isDir = false;
+      try { isDir = statSync(p).isDirectory(); } catch (e) {}
+      if (!isDir) continue;
+      // 目录内含 exe 才算运行目录（不含 exe 的空壳目录不写，避免自动建目录误导）
+      try { if (readdirSync(p).includes("dsh_client_full.exe")) out.push(p); } catch (e) {}
+    }
+    return out;
+  } catch {
+    return [];
+  }
+}
+
 export function apply(ctx, config) {
   const targetDir = config?.targetDir;
   try {
     const home = winUserHome();
     if (!home) throw new Error("未找到 /mnt/c/Users 下的 Windows 用户目录");
-    const dir = targetDir ?? path.join(home, "Desktop", "DSH-Pet-Client");
     const port = ctx.webServer?.port;
     if (port === undefined) throw new Error("webServer.port 不可用");
     const authUrl = ctx.connection.authenticatedUrl(`http://127.0.0.1:${port}`);
-    mkdirSync(dir, { recursive: true });
-    const target = path.join(dir, "dsh-web-token.txt");
-    writeFileSync(target, `${authUrl}\n`, "utf8");
-    ctx.logger?.info?.(`[dsh-web-token-sync] 已写入认证 URL -> ${target}`);
+    // 目标目录：显式配置 > 探测到的运行目录列表 > 空（不自动 mkdir 新目录）
+    const dirs = targetDir ? [targetDir] : clientDirs(home);
+    if (dirs.length === 0) {
+      ctx.logger?.info?.("[dsh-web-token-sync] 未找到 DSH 客户端运行目录，跳过 token 写入");
+      return;
+    }
+    for (const dir of dirs) {
+      try {
+        mkdirSync(dir, { recursive: true });
+        const target = path.join(dir, "dsh-web-token.txt");
+        writeFileSync(target, `${authUrl}\n`, "utf8");
+        ctx.logger?.info?.(`[dsh-web-token-sync] 已写入认证 URL -> ${target}`);
+      } catch (e) {
+        ctx.logger?.warn?.(`[dsh-web-token-sync] 写入 ${dir} 失败: ${e instanceof Error ? e.message : String(e)}`);
+      }
+    }
   } catch (error) {
     ctx.logger?.warn?.(
       `[dsh-web-token-sync] 写入失败: ${error instanceof Error ? error.message : String(error)}`
