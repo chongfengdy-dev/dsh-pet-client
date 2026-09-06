@@ -53,6 +53,17 @@ dsh plugin --profile web add "$PKG_DIR/dsh-web-token-sync" 2>/dev/null || \
   dsh plugin --profile web add "$PKG_DIR/dsh-web-token-sync"
 
 echo ""
+echo "== 5b/6 部署纯净 dsh 模式（切换脚本 + 纯净 patch）=="
+mkdir -p "$HOME/.dsh/profiles/web"
+cp "$PKG_DIR/clean.patch.yml" "$HOME/.dsh/profiles/web/clean.patch.yml"
+echo "[信息] 纯净 patch -> $HOME/.dsh/profiles/web/clean.patch.yml"
+mkdir -p "$HOME/.local/bin"
+cp "$PKG_DIR/web-launch.sh" "$HOME/.local/bin/dsh-web-launch.sh"
+cp "$PKG_DIR/dsh-mode.sh" "$HOME/.local/bin/dsh-mode"
+chmod +x "$HOME/.local/bin/dsh-web-launch.sh" "$HOME/.local/bin/dsh-mode"
+echo "[信息] 切换脚本 dsh-mode + 启动脚本 dsh-web-launch.sh -> $HOME/.local/bin"
+
+echo ""
 echo "== 6/6 配置 systemd 服务（自启）=="
 sed -e "s|<USER>|$USER_NAME|g" -e "s|<PKG_DIR>|$PKG_DIR|g" \
     -e "s|/home/<USER>/.npm-global/bin/dsh|$DSH_BIN|g" \
@@ -61,6 +72,13 @@ sed -e "s|<USER>|$USER_NAME|g" -e "s|<PKG_DIR>|$PKG_DIR|g" \
     "$PKG_DIR/dsh-terminal.service" > /tmp/dsh-terminal.generated
 sudo cp /tmp/dsh-web.generated /etc/systemd/system/dsh-web.service
 sudo cp /tmp/dsh-terminal.generated /etc/systemd/system/dsh-terminal.service
+# 纯净模式：用 drop-in 把 dsh-web 的 ExecStart 改为 web-launch 包装脚本（读标记决定是否加 --patch）
+sudo mkdir -p /etc/systemd/system/dsh-web.service.d
+sudo tee /etc/systemd/system/dsh-web.service.d/override-exec.conf > /dev/null <<EOF
+[Service]
+ExecStart=
+ExecStart=/usr/bin/bash $HOME/.local/bin/dsh-web-launch.sh
+EOF
 sudo systemctl daemon-reload
 sudo systemctl enable --now dsh-web dsh-terminal
 echo "[信息] dsh-web + dsh-terminal 服务已启用并启动"

@@ -11,7 +11,7 @@
 # 反复重试、token 多次变化导致客户端跟不上(401)。
 set -euo pipefail
 
-MARK="/home/dream/.dsh/.dsh-web-mode"
+MARK="$HOME/.dsh/.dsh-web-mode"
 SERVICE="dsh-web"
 PORT=3080
 
