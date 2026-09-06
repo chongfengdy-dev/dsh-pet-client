@@ -156,8 +156,7 @@ proc openCmdDialog(cmd: string) =
 
 proc showTrayMenu(hwnd: HWND) =
   var hMenu = CreatePopupMenu()
-  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPENWEB, toW("打开 DSH（独立窗口）"))
-  discard AppendMenuW(hMenu, MF_SEPARATOR, 0, nil)
+  # v2.2：去掉「打开 DSH」菜单项（呼出/最小化走托盘左键与鲸鱼单击，菜单只留切换/宠物/退出）
   discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_FULL, toW("切换：完整模式（复制指令）"))
   discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_CLEAN, toW("切换：纯净模式（复制指令）"))
   discard AppendMenuW(hMenu, MF_SEPARATOR, 0, nil)
@@ -180,16 +179,20 @@ proc showTrayMenu(hwnd: HWND) =
 var gFoundDshHwnd: HWND
 
 proc findDshWndProc(hwnd: HWND, lParam: LPARAM): WINBOOL {.stdcall.} =
+  # 标题"包含" DeepSeek Harness 即命中（term-panels 固定精确值；官方页面若把
+  # 会话标题拼进 title（"xxx - DeepSeek Harness" 或反序）也能命中），避免每点一次
+  # 找不到窗口重复开新 PWA 窗口（2026-09-06 主实测问题）
   var title: array[256, WCHAR]
   let tn = GetWindowTextW(hwnd, cast[LPWSTR](title.addr), 256)
-  if tn == 16:
+  if tn >= 16:
     const marker = "DeepSeek Harness"
-    var m = true
-    for j in 0 ..< 16:
-      if title[j] != WCHAR(marker[j]): m = false; break
-    if m:
-      gFoundDshHwnd = hwnd
-      return FALSE
+    for i in 0 .. tn - 16:
+      var m = true
+      for j in 0 ..< 16:
+        if title[i + j] != WCHAR(marker[j]): m = false; break
+      if m:
+        gFoundDshHwnd = hwnd
+        return FALSE
   return TRUE
 
 proc findDshWindow(): HWND =
@@ -216,26 +219,37 @@ proc findPwaShortcut(): string =
   return ""
 
 proc toggleDshApp() =
-  ## 点鲸鱼/托盘「打开 DSH」：对话窗口(PWA/浏览器标签)已开 → 呼出/最小化切换；
+  ## 点鲸鱼/托盘左键：对话窗口(PWA/浏览器标签)已开 → 呼出/最小化切换；
   ## 未开 → 优先拉起已安装 PWA 独立窗口(.lnk)，无 PWA → 回落默认浏览器打开 3080。
+  let t0 = GetTickCount64()
   let wnd = findDshWindow()
   if wnd != 0:
     if IsIconic(wnd) == 1:                      # 最小化 → 呼出
       discard ShowWindow(wnd, SW_RESTORE)
       discard SetForegroundWindow(wnd)
+      dbg("toggle: restore, find=" & $(GetTickCount64() - t0) & "ms")
     elif IsWindowVisible(wnd) == 0:             # 隐藏（异常）→ 显示
       discard ShowWindow(wnd, SW_SHOW)
       discard ShowWindow(wnd, SW_RESTORE)
       discard SetForegroundWindow(wnd)
+      dbg("toggle: show-hidden, find=" & $(GetTickCount64() - t0) & "ms")
     else:                                       # 可见 → 最小化
       discard ShowWindow(wnd, SW_MINIMIZE)
+      dbg("toggle: minimize, find=" & $(GetTickCount64() - t0) & "ms")
+    return
+  # 防重复开窗：刚拉起过 PWA(2s 内窗口可能还在冷启动) → 忽略本次点击
+  let nowT = GetTickCount64()
+  if nowT - gDshLaunchTick < 2000:
+    dbg("toggle: launch cooldown (2s), skip")
     return
   let lnk = findPwaShortcut()                   # 无窗口 → 拉起 PWA
   if lnk.len > 0:
-    dbg("launch PWA: " & lnk)
+    gDshLaunchTick = nowT
+    dbg("toggle: no window, find=" & $(nowT - t0) & "ms, launching PWA: " & lnk)
     let w = toW(lnk)
     if w != nil: discard ShellExecuteW(0, nil, w, nil, nil, SW_SHOW)
   else:
+    dbg("toggle: no window, no PWA, open browser, find=" & $(GetTickCount64() - t0) & "ms")
     openInBrowser()                             # 未装 PWA → 回落默认浏览器
 
 proc floatPaint(hwnd: HWND)  # 前向声明（托盘 wndProc 与 floatWndProc 都会调用）
@@ -349,6 +363,7 @@ var
   gPetBlinkTick: int64 = 0  # 心跳计时
   gDshWinTick: int64 = 0    # dsh 窗口状态轮询计时（命中后 50ms 快查 / 未命中 1s 枚举）
   gDshHwnd: HWND = 0        # 命中的 dsh 对话窗口句柄缓存（避免反复全系统 EnumWindows）
+  gDshLaunchTick: int64 = 0 # 最近一次拉起 PWA 的时刻（防 2s 内重复点击重复开窗）
   gDshMinimized = true      # dsh 对话窗口(PWA)收起态（最小化或未开；启动默认收起=黑）
   gPetPollTick: int64 = 0   # 宠物状态轮询计时（自适应间隔）
   gPetPollOk = false        # 上次轮询是否成功（成功 1s / 失败 5s 间隔）
