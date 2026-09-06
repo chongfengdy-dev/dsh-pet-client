@@ -1,0 +1,6 @@
+# dsh-web-token-sync: dsh web 启动后把带 token 的认证 URL 写入 Windows 桌面客户端 token 文件。
+# 以 cordis loader entry 注册（insert.name = 模块包名，经 profile node_modules 解析到本包）。
+- insert:
+    - id: dsh-web-token-sync
+      name: dsh-web-token-sync
+      config: {}

@@ -59,6 +59,17 @@ proc bootUrl(): string =
   let t = launchToken()
   if t.len > 0: WebUrl & "?token=" & t else: WebUrl
 
+proc waitTokenStable() =
+  ## 登录刷新前轮询等 token 文件稳定（token-sync 写新 token 有延迟，sleep 400 可能不够）。
+  ## 读到连续两次相同的非空值视为写完稳定；最长等 2.5s（避免重启后卡死）。
+  var prev = ""
+  for i in 0..<25:
+    let cur = launchToken()
+    if cur.len > 0 and cur == prev:
+      return   # 连续两次相同 = 已稳定
+    prev = cur
+    sleep(100)
+
 var
   gWindow: Window
   gTrayData: NOTIFYICONDATAW
@@ -250,6 +261,15 @@ proc toW(s: string): LPCWSTR =
                               cast[LPWSTR](buf.addr), 512)
   if n > 0: cast[LPCWSTR](buf.addr) else: nil
 
+proc toWs(s: string): wstring =
+  ## 独立 GC 缓冲的 UTF-16 宽字符串（distinct string；避免 toW 的静态 buf 被多参数复用覆盖）
+  const CP_UTF8 = 65001
+  let wlen = MultiByteToWideChar(CP_UTF8, 0, s.cstring, -1, nil, 0)
+  var buf = newString((wlen) * 2)
+  discard MultiByteToWideChar(CP_UTF8, 0, s.cstring, -1,
+                              cast[LPWSTR](addr buf[0]), wlen)
+  result = wstring(buf)
+
 proc openOriginalInBrowser() =
   ## 后备入口：用系统默认浏览器打开原版 dsh web（无自定义元素）。
   ## 客户端内嵌页因 dsh 升级/认证等暂时打不开时，一键用浏览器应急。
@@ -260,10 +280,45 @@ proc openOriginalInBrowser() =
   if wurl != nil:
     discard ShellExecuteW(0, nil, wurl, nil, nil, SW_SHOW)
 
+proc openCmdDialog(cmd: string) =
+  ## 弹出对话框：显示需用户在 bash 运行的指令，并自动复制到剪贴板方便一键粘贴。
+  ## 用途：托盘一键切换纯净/完整 dsh 模式。因 dsh 在 WSL、切换需 sudo systemctl
+  ## restart（sudo 无免密），exe 无法直接执行，改为"复制指令给用户去终端跑"。
+  ## 复制指令到剪贴板（CF_UNICODETEXT）
+  # 打开剪贴板：传主窗口 hwnd 提高成功率；失败重试一次（托盘点击瞬时占用常见）
+  var clip = OpenClipboard(findMainWindow())
+  if clip == 0:
+    sleep(50)
+    clip = OpenClipboard(findMainWindow())
+  if clip == 0:
+    let mFail = toWs("打开剪贴板失败，请手动复制下面指令到 WSL bash（遇到提权输入密码）：\n\n" & cmd)
+    discard MessageBoxW(0, mFail, toWs("DSH 模式切换"), 0)
+    return
+  discard EmptyClipboard()
+  let bytes = (cmd.len + 1) * sizeof(WCHAR)
+  let hMem = GlobalAlloc(GMEM_MOVEABLE or GMEM_ZEROINIT, bytes)
+  if cast[pointer](hMem) != nil:
+    let p = cast[ptr UncheckedArray[WCHAR]](GlobalLock(hMem))
+    if p != nil:
+      # 复制 UTF-16 字节
+      var i = 0
+      for ch in cmd:
+        let wc = ord(ch)
+        p[i] = cast[WCHAR](wc)
+        inc(i)
+      p[cmd.len] = cast[WCHAR](0)
+      discard GlobalUnlock(hMem)
+      discard SetClipboardData(CF_UNICODETEXT, hMem)
+    discard CloseClipboard()
+  # MessageBox 显示指令（wstring 独立缓冲，converter 自动转 LPWSTR，避免 toW 静态缓冲覆盖）
+  let mBody = toWs("已复制以下指令到剪贴板，请在 WSL bash 运行（遇到提权提示输入密码）：\n\n" & cmd)
+  let mTitle = toWs("DSH 模式切换")
+  discard MessageBoxW(0, mBody, mTitle, 0)
+
 proc showTrayMenu(hwnd: HWND) =
   var hMenu = CreatePopupMenu()
-  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, toW("打开 DSH"))
-  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_BROWSER, toW("浏览器打开原版"))
+  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, toW("打开 DSH（完整版）"))
+  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_BROWSER, toW("打开 DSH（纯净模式）"))
   if gPetVisible:
     discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_PET, toW("隐藏宠物"))
   else:
@@ -292,10 +347,10 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   of WM_COMMAND:
     case LOWORD(wParam)
     of ID_TRAY_OPEN:
-      showMainWindowIfMissing()
+      openCmdDialog("sudo bash ~/deepseek-harness/nim-client/dsh-mode.sh full")
       result = 0
     of ID_TRAY_BROWSER:
-      openOriginalInBrowser()
+      openCmdDialog("sudo bash ~/deepseek-harness/nim-client/dsh-mode.sh clean")
       result = 0
     of ID_TRAY_PET:
       # 显示/隐藏悬浮宠物（隐藏时停动画定时器省资源）
@@ -1017,6 +1072,7 @@ when isMainModule:
         gBackendWasDown = false
         dbg("backend recovered -> navigate refresh")
         if findMainWindow() != 0:
+          waitTokenStable()   # 等 token-sync 把新 launch token 写入并稳定（避免读到旧 token 导致 401）
           gWindow.navigate(bootUrl())
           dbg("navigate to " & bootUrl())
 

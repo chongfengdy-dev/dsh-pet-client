@@ -1,5 +1,6 @@
 window.__ModuleLoader__.load({
 	id: "dsh-term-panels",
+	// @@BIKINI_VERSION_MARK@@ v20260905-2250 (页面缩放持久化+终端字体修复)
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
@@ -77,6 +78,8 @@ window.__ModuleLoader__.load({
 		// 终端宿主/状态提升到模块顶层（2026-08-19：版本更新提示的 typeSudoRestart 在 apply 外需访问）
 		const termHost = document.createElement("div");
 		const termState = { term: null, fit: null, ws: null, initStarted: false };
+		// 2026-09-05 服务端设置恢复缓存（模块顶层，供 loadTermSettings/initTerminal 读取；服务端为权威）
+		let _serverSettingsCache = null;
 
 		function apply(ctx) {
 			const connection = ctx.connection;
@@ -138,6 +141,11 @@ window.__ModuleLoader__.load({
 			let uiFont = termSettings.uiFont || "";
 			let uiFontSize = termSettings.uiFontSize || 14;
 			let sysFonts = null;   // 系统字体列表（懒加载缓存）
+			// 2026-09-05 服务端恢复后同步设置面板下拉框：通知 uiFont/uiFontSize 变化
+			const UI_FONT_CHANGE_EVT = "dsh-ui-font-change";
+			function notifyUiFontChange() {
+				try { window.dispatchEvent(new CustomEvent(UI_FONT_CHANGE_EVT, { detail: { uiFont, uiFontSize } })); } catch (e) {}
+			}
 			async function loadSystemFonts() {
 				if (sysFonts) return sysFonts;
 				const names = [];
@@ -174,6 +182,16 @@ window.__ModuleLoader__.load({
 						const [size, setSize] = React.useState(uiFontSize);
 						const [fonts, setFonts] = React.useState([]);
 						React.useEffect(() => { loadSystemFonts().then((f) => setFonts(f)); }, []);
+						// 2026-09-05 服务端恢复后同步下拉框显示（避免显示“系统默认”而实际已应用自定义字体）
+						React.useEffect(() => {
+							const onUiFontChange = (e) => {
+								const d = e.detail || {};
+								if (typeof d.uiFont === "string") setFont(d.uiFont);
+								if (typeof d.uiFontSize === "number") setSize(String(d.uiFontSize));
+							};
+							window.addEventListener(UI_FONT_CHANGE_EVT, onUiFontChange);
+							return () => window.removeEventListener(UI_FONT_CHANGE_EVT, onUiFontChange);
+						}, []);
 						const sel = React.createElement("select", {
 							value: font,
 							onChange: (e) => { const v = e.target.value; setFont(v); pickFont(v); },
@@ -435,8 +453,8 @@ window.__ModuleLoader__.load({
 			};
 			// 2026-09-05 主更正：终端（xterm 内容）保持自己的字体设置（⚙ 面板 fontIdx 选择），不随界面字体
 			// 应用设置：termHost 背景 = 自定义色×透明度 + 图片层（可选，xterm 背景透明）
-			const applyTermSettings = () => {
-				saveTermSettings(termSettings);
+			const applyTermSettings = (opts) => {
+				saveTermSettings(termSettings, opts);
 				termHost.style.background = hexToRgba(termSettings.bg, termSettings.alpha / 100);
 				updateBgImage();
 				if (!termState.term) return;
@@ -446,7 +464,7 @@ window.__ModuleLoader__.load({
 				if (termState.fit) termState.fit.fit();
 				sendResize(termState);
 			};
-			applyTermSettings();   // 初始背景
+			applyTermSettings({ skipServer: true });   // 初始背景：仅本地渲染，不覆盖服务端（fetch 恢复后再以服务端为权威写回）
 			// 启动时从服务端恢复设置/几何（跨重启持久；首次/异常用默认）
 			// 服务端为权威（WebView2 localStorage 受缓存目录影响不可靠）
 			fetch("http://127.0.0.1:3081/api/term-state", { mode: "cors" })
@@ -478,7 +496,16 @@ window.__ModuleLoader__.load({
 					uiFontSize = termSettings.uiFontSize || 14;
 					if (uiFont) applyUiFont(uiFont);
 					applyUiFontSize(uiFontSize);
+					// 页面缩放由浏览器/WebView 原生记忆（Ctrl+滚轮缩放重开已保留），此处不再用 pageZoom 覆盖 zoom
 					applyTermSettings();
+					notifyUiFontChange();   // 同步设置面板下拉框显示
+					_serverSettingsCache = { ...termSettings };   // 2026-09-05 供 loadTermSettings 优先读取（服务端权威）
+					// 同步终端设置面板 UI（滑条/字号数值/字体下拉）到服务端恢复值
+					try {
+						sizeInput.value = String(termSettings.fontSize);
+						sizeVal.textContent = String(termSettings.fontSize);
+						fontSel.value = String(termSettings.fontIdx);
+					} catch (e) {}
 				})
 				.catch(() => {});
 			alphaInput.addEventListener("input", () => {
@@ -727,8 +754,11 @@ window.__ModuleLoader__.load({
 
 		// ---------- 终端设置存取（字号/字体，localStorage） ----------
 		function loadTermSettings() {
+			// 服务端权威恢复缓存优先（fetch 恢复后设置；WebView2 localStorage 重启不可靠）
+			if (_serverSettingsCache) return { ..._serverSettingsCache };
 			// 默认设置（主 2026-08-16 定稿：深色 #0d1117、透明度 60%、字号 16、Consolas）
 			// 2026-09-05 界面字体/字号并入本对象（与服务端持久化同通道，WebView2 localStorage 不可靠）
+			// 页面缩放由浏览器/WebView 原生记忆，不在本对象持久化（已删 pageZoom）
 			let s = { bg: "#0d1117", alpha: 60, fontSize: 16, fontIdx: 0, bgImage: "", bgImageAlpha: 100, uiFont: "", uiFontSize: 14 };
 			try {
 				const raw = JSON.parse(localStorage.getItem(TERM_SETTINGS_KEY) || "null");
@@ -745,9 +775,10 @@ window.__ModuleLoader__.load({
 			} catch (e) {}
 			return s;
 		}
-		function saveTermSettings(s) {
+		function saveTermSettings(s, opts) {
 			try { localStorage.setItem(TERM_SETTINGS_KEY, JSON.stringify(s)); } catch (e) {}
 			// 服务端持久化（跨重启保留；WebView2 localStorage 受缓存目录影响不可靠）
+			if (opts && opts.skipServer) return;   // 启动初始渲染不覆盖服务端真值，待 fetch 恢复后以服务端为权威写回
 			try {
 				const el = document.getElementById(TERM_PANEL_ID);
 				const geom = el ? { x: el.offsetLeft, y: el.offsetTop, w: el.offsetWidth, h: el.offsetHeight } : null;
@@ -814,7 +845,7 @@ window.__ModuleLoader__.load({
 		function initTerminal(state, host) {
 			if (!window.Terminal || !window.FitAddon) return;
 			const th = termTheme();
-			const ts = loadTermSettings();
+			const ts = loadTermSettings();   // 用 loadTermSettings（申请求/服务端恢复优先，见其实现）
 			const term = new window.Terminal({
 				cursorBlink: true,
 				fontSize: ts.fontSize,
@@ -919,7 +950,6 @@ window.__ModuleLoader__.load({
 				userSelect: "none",
 			});
 			document.body.appendChild(el);
-			const baseDPR = window.devicePixelRatio || 1;
 			let hideTimer = null;
 			let readTimer = null;
 			function show() {
@@ -927,10 +957,11 @@ window.__ModuleLoader__.load({
 				el.textContent = "…";
 				clearTimeout(hideTimer);
 				clearTimeout(readTimer);
-				// 等 WebView2 缩放生效后再读 DPR（wheel 事件时缩放尚未应用）
+				// 等页面缩放生效后再读百分比（wheel 事件时缩放尚未应用）
+				// 2026-09-05 用 outerWidth/innerWidth 读纯网页缩放（排除系统 DPI；devicePixelRatio 混入系统缩放会不准）
 				readTimer = setTimeout(() => {
-					const dpr = window.devicePixelRatio || 1;
-					el.textContent = Math.round((dpr / baseDPR) * 100) + "%";
+					const zoom = Math.round((window.outerWidth / window.innerWidth) * 100);
+					el.textContent = zoom + "%";
 				}, 120);
 				hideTimer = setTimeout(() => { el.style.display = "none"; }, 1500);
 			}
@@ -1615,12 +1646,12 @@ window.__ModuleLoader__.load({
 				backdropFilter: "blur(4px)",
 				color: "var(--dsw-alias-label-primary)",
 				fontFamily: 'system-ui, "Segoe UI", sans-serif',
-				fontSize: "11px", lineHeight: "1.6",
+				fontSize: "13px", lineHeight: "1.6",
 				cursor: "move", userSelect: "none",
 			});
 			const title = document.createElement("div");
 			Object.assign(title.style, {
-				fontWeight: "600", fontSize: "11px",
+				fontWeight: "600", fontSize: "13px",
 				color: "var(--dsw-alias-label-secondary)",
 				marginBottom: "4px",
 			});
