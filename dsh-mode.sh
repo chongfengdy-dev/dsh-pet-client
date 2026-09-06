@@ -39,6 +39,8 @@ switch() {
   wait_port_free
   echo "[3/3] 启动 $SERVICE ..."
   sudo systemctl start "$SERVICE"
+  # v2.2：通知页面自动刷新（3081 SSE 通道，事件驱动零轮询；3081 未起则忽略）
+  curl -s -m 2 -X POST http://127.0.0.1:3081/api/notify-reload >/dev/null 2>&1 || true
   echo "完成: 已切到 $mode 模式(端口 $PORT)"
 }
 

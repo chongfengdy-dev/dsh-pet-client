@@ -665,6 +665,27 @@ wss.on('connection', (ws) => {
   });
 });
 
+// ---------- 页面自动刷新推送（v2.2 主需求）：dsh-mode 切换完成 → SSE 推页面 reload ----------
+// 事件驱动零轮询：dsh-mode.sh 切换完成后 curl POST /api/notify-reload →
+// 广播给所有 SSE 订阅页面（token-sync client 每页面一条 EventSource 长连）→
+// 页面 location.reload()。走 3081 通道：dsh web(3080) 重启不影响本服务与页面长连。
+const reloadClients = new Set();
+app.get('/api/events', (req, res) => {
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+  });
+  res.write('retry: 3000\n\n');
+  reloadClients.add(res);
+  req.on('close', () => reloadClients.delete(res));
+});
+app.post('/api/notify-reload', (req, res) => {
+  const data = 'event: reload\ndata: {}\n\n';
+  for (const c of reloadClients) { try { c.write(data); } catch (e) {} }
+  res.json({ ok: true, subscribers: reloadClients.size });
+});
+
 server.listen(PORT, HOST, () => {
   console.log(`[dsh-terminal] listening on http://${HOST}:${PORT} (pid=${process.pid})`);
 });

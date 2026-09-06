@@ -38,6 +38,69 @@ window.__ModuleLoader__.load({
 		setInterval(() => {
 			if (document.title !== "DeepSeek Harness") document.title = "DeepSeek Harness";
 		}, 1500);
+		// v2.2 PWA 安装引导（主需求）：浏览器强制 PWA 安装须用户一次确认——
+		// 捕获 beforeinstallprompt（页面可安装）且在普通标签（非应用窗口）时，
+		// 右下角浮层提示"安装 DSH 桌面应用"，点安装走系统安装（之后点鲸鱼直接拉 PWA 窗口）。
+		// 每会话最多提示一次（sessionStorage 去重），已装(appinstalled/standalone)不提示。
+		let dshDeferredPrompt = null;
+		function pwaInstallBar() {
+			if (matchMedia("(display-mode: standalone)").matches) return;
+			if (sessionStorage.getItem("dsh-pwa-install-hint")) return;
+			sessionStorage.setItem("dsh-pwa-install-hint", "1");
+			const bar = document.createElement("div");
+			Object.assign(bar.style, {
+				position: "fixed", right: "16px", bottom: "16px", zIndex: "12000",
+				maxWidth: "300px", padding: "12px 14px", borderRadius: "12px",
+				background: "var(--dsw-alias-bg-layer-2)",
+				border: "1px solid var(--dsw-alias-border-l2)",
+				boxShadow: "var(--dsw-shadow-lv3, 0 8px 24px rgba(0,0,0,.3))",
+				color: "var(--dsw-alias-label-primary)",
+				fontFamily: 'system-ui, "Segoe UI", sans-serif',
+				fontSize: "13px", lineHeight: "1.5",
+			});
+			const txt = document.createElement("div");
+			txt.textContent = "把 DSH 装成桌面应用？点桌面鲸鱼即可呼出独立窗口。";
+			bar.appendChild(txt);
+			const btns = document.createElement("div");
+			Object.assign(btns.style, { display: "flex", justifyContent: "flex-end", gap: "8px", marginTop: "10px" });
+			const mk = (label, primary) => {
+				const b = document.createElement("button");
+				b.textContent = label;
+				Object.assign(b.style, {
+					padding: "5px 14px", borderRadius: "8px", cursor: "pointer",
+					border: "1px solid var(--dsw-alias-border-l2)",
+					background: primary ? "var(--dsw-alias-state-info, #4d6bfe)" : "var(--dsw-alias-bg-layer-3, var(--dsw-alias-bg-layer-1))",
+					color: primary ? "#fff" : "var(--dsw-alias-label-primary)",
+					fontSize: "13px",
+				});
+				return b;
+			};
+			const later = mk("稍后", false);
+			later.addEventListener("click", () => bar.remove());
+			const install = mk("安装", true);
+			install.addEventListener("click", async () => {
+				if (!dshDeferredPrompt) return;
+				bar.remove();
+				try {
+					dshDeferredPrompt.prompt();
+					await dshDeferredPrompt.userChoice;
+				} catch (e) {}
+				dshDeferredPrompt = null;
+			});
+			btns.appendChild(later);
+			btns.appendChild(install);
+			bar.appendChild(btns);
+			document.body.appendChild(bar);
+		}
+		window.addEventListener("beforeinstallprompt", (e) => {
+			e.preventDefault();
+			dshDeferredPrompt = e;
+			pwaInstallBar();
+		});
+		window.addEventListener("appinstalled", () => {
+			dshDeferredPrompt = null;
+			document.querySelectorAll("[data-dsh-pwa-bar]").forEach((el) => el.remove());
+		});
 		const DOCK_ID = "dsh-panels-dock";
 		const TERM_PANEL_ID = "dsh-term-panel";
 		const TERM_HOST_ID = "dsh-term-host";
