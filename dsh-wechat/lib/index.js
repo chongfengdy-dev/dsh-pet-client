@@ -103,8 +103,10 @@ function ensureSessionArchived(sessionId) {
 // 聚合一轮 turn 的最终 assistant 文本（参考 dsh-headless summarize）
 function summarizeReply(session, firstSeq) {
 	let text = "", reason;
-	for (const ev of session.events) {
-		if (ev.seq < firstSeq) continue;
+	// v2.2(2026-09-06): dsh 依赖升 0.1.2-rc.1 后 session.events 数组改为方法
+	// snapshotEvents(fromSeq)——rc.7 旧 API 会 "session.events is not iterable"
+	const events = session.snapshotEvents(firstSeq);
+	for (const ev of events) {
 		if (ev.type === "turn/start") continue;
 		if (ev.type === "assistant/message") {
 			const joined = (ev.data?.message?.content || [])
@@ -164,7 +166,11 @@ async function askAgent(state, ctx, peerKey, userText) {
 	await entry.agent.whenIdle();
 	await sessions.flush(entry.agent.session);
 	const { text, reason } = summarizeReply(entry.agent.session, firstSeq);
-	if (reason?.kind === "error") return "（处理出错：" + (reason.error?.code || "unknown") + "）";
+	if (reason?.kind === "error") {
+		const err = reason.error || {};
+		console.error("[wechat] agent error:", err && err.stack ? err.stack.slice(0, 1500) : JSON.stringify(err));
+		return "（处理出错：" + (err.code || "unknown") + " - " + (err.message || err.code || "无详情") + "）";
+	}
 	return text || "（无回复）";
 }
 
