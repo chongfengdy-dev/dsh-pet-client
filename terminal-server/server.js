@@ -150,6 +150,16 @@ app.post('/api/pet-state', (req, res) => {
   writePetStateFile();
   res.json(petState);
 });
+// v2.2 浏览器化：页面聚焦 = 主已看到回复 → green 转 blue 停绿闪
+// （原 Nim WebView 版：窗口置前写 pet-ack.json；浏览器方案由 term-panels
+// 页面在 visibilitychange/focus 时 POST 本端点，语义等价"主看到回复"）
+app.post('/api/pet-ack', (req, res) => {
+  if (petState.pet === 'green') {
+    petState = { pet: 'blue' };
+    writePetStateFile();
+  }
+  res.json({ ok: true });
+});
 // ---------- 会话删除 / 恢复（已归档会话管理，2026-08-27 主需求） ----------
 // dsh 核心无删除/取消归档 API：
 //  - 删除：删文件 ~/.dsh/sessions/<工作区>/session-<uuid>/，fs.watch 自动刷新列表
@@ -230,20 +240,6 @@ app.post('/api/session-unarchive', (req, res) => {
     } catch (e) {
       console.log('[session-unarchive] web restart failed:', e.message);
     }
-    res.json({ ok: true });
-  } catch (e) {
-    res.status(500).json({ error: e.message });
-  }
-});
-// ---------- 鼠标手势最小化标记（一次性） ----------
-// 2026-08-26 主需求：页面右键 L 手势（下→右）→ 最小化客户端窗口。
-// 不走 pet-state（ask-pending 状态机会覆盖它，1s 轮询可能错过），
-// 独立写一次性标记文件，Nim 端读到即消费（执行最小化 + 删除文件）。
-const MINIMIZE_FLAG_FILE = (winUserHome() || '/mnt/c/Users/') + 'minimize-flag.json';
-app.post('/api/minimize', (req, res) => {
-  console.log('[minimize] gesture triggered at', new Date().toISOString());
-  try {
-    fs.writeFileSync(MINIMIZE_FLAG_FILE, JSON.stringify({ at: Date.now() }), 'utf8');
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });

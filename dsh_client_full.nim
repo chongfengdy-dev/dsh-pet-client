@@ -1,11 +1,11 @@
-# DSH Nim 桌面客户端 (webui + winim 完整版)
-# 功能: 加载 3080 | 鲸鱼图标 | 托盘 | 悬浮图标 | 开机自启 | 尺寸记忆 | 三色宠物状态机
-import webui
-from webui/bindings import minimize, set_close_handler_wv
+# DSH Nim 桌面客户端 (v2.2 浏览器化：winim 宠物壳)
+# 功能: 悬浮鲸鱼(四色状态机) | 托盘 | 默认浏览器打开 3080 | 开机自启
+# v2.2 架构(2026-09-06 主拍板)：去掉 WebView2 独立窗口——对话界面改用默认
+# 浏览器访问 127.0.0.1:3080(dsh web 本就是 web 应用)；壳层只留桌面鲸鱼+托盘
+# (鲸鱼用途=提醒干活进度)。L 手势/窗口重建/token 交换等壳层逻辑全部移除。
 import winim
 import winim/inc/shellapi
-import strutils, os, math, random, net
-import std/typedthreads   # Nim 2.x：threads 模块改名 typedthreads（createThread/Thread）
+import strutils, os, math, random
 
 # winmm 高精度定时器（winim 未封装，手动声明；60fps 动画需要）
 proc timeBeginPeriod(uPeriod: uint32): uint32 {.stdcall, dynlib: "winmm.dll", importc.}
@@ -20,29 +20,24 @@ proc dbg(msg: string) =
 
 const
   WebUrl = "http://127.0.0.1:3080"
-  WebTokenFile = "dsh-web-token.txt"   # 认证引导 token 文件（exe 同目录）
+  WebTokenFile = "dsh-web-token.txt"   # 认证引导 token 文件（exe 同目录；浏览器首次打开带 token 幂等认证）
   AppId = "dsh_nim_client"
   FLOAT_ANIM_MS = 16        # 悬浮动画帧间隔（60fps 定稿；主实测 60fps 开宠物稳定——降频无关，
                             # 稳定关键是无窗口挂钩，见主循环注释）
   # 托盘自定义消息
   WM_TRAYICON = WM_APP + 1
-  ID_TRAY_OPEN = 1
-  ID_TRAY_BROWSER = 2      # 后备入口：默认浏览器打开原版 dsh
-  ID_TRAY_EXIT = 3
-  ID_TRAY_PET = 4          # 显示/隐藏宠物开关
+  ID_TRAY_OPENWEB = 1       # 打开 DSH（默认浏览器）
+  ID_TRAY_FULL = 2          # 切换：完整模式（复制指令）
+  ID_TRAY_CLEAN = 3         # 切换：纯净模式（复制指令）
+  ID_TRAY_PET = 4           # 显示/隐藏宠物开关
+  ID_TRAY_EXIT = 5
 
 # ---- dsh web 认证引导（2026-09-05：dsh 0.1.2-rc.1 起 web 需浏览器认证）----
-# dsh web 每次进程启动生成一次性 launch token，打印在启动输出里
-# （URL 形如 http://127.0.0.1:3080/?token=xxx）。浏览器/WebView 首次必须带
-# token 访问一次：服务端校验通过后种下持久 cookie（默认 30 天，绑定
-# Host:127.0.0.1:3080），此后普通访问免认证。主浏览器已各自完成认证；本壳的
-# WebView2 是独立 cookie 库，须自己完成一次 token 交换——每次开窗/重建/
-# 刷新导航都优先用带 token 的 URL 打开（幂等：cookie 已有效时等于续期，
-# 服务端 303 落回干净页面），随后继续使用干净 WebUrl。
+# 浏览器/WebView 首次必须带 token 访问一次：服务端校验通过后种下持久 cookie
+# （默认 30 天），此后普通访问免认证。主浏览器已各自完成认证；本壳只负责
+# 拉起默认浏览器时带上 token（幂等：cookie 已有效时等于续期）。
 # 用法：把 dsh web 启动时打印的完整 URL（含 ?token=，或只存 token 本身）
 # 写入 exe 同目录 dsh-web-token.txt 后启动客户端。
-# 注意：dsh web 重启会更换 token；若页面停在 401，更新该文件后重启客户端
-# 即可（cookie 未过期时即使 token 文件缺失/过期也不影响正常访问）。
 proc launchToken(): string =
   let p = getAppDir() & "\\" & WebTokenFile
   try:
@@ -59,171 +54,16 @@ proc bootUrl(): string =
   let t = launchToken()
   if t.len > 0: WebUrl & "?token=" & t else: WebUrl
 
-proc waitTokenStable() =
-  ## 登录刷新前轮询等 token 文件稳定（token-sync 写新 token 有延迟，sleep 400 可能不够）。
-  ## 读到连续两次相同的非空值视为写完稳定；最长等 2.5s（避免重启后卡死）。
-  var prev = ""
-  for i in 0..<25:
-    let cur = launchToken()
-    if cur.len > 0 and cur == prev:
-      return   # 连续两次相同 = 已稳定
-    prev = cur
-    sleep(100)
-
 var
-  gWindow: Window
   gTrayData: NOTIFYICONDATAW
   gRunning = true
   gQuitting = false
-  gLastW = 0
-  gLastH = 0
-  gCloseCount = 0
-  gBackendDown = false      # 后端断连标志（后端不可达时停止重建尝试，等恢复）
-  gBackendWasDown = false   # 后端曾不可达（2026-08-21：重启 dsh-web 后自动刷新内嵌页面用）
-  gBackendCheckTick: int64 = 0  # 后端存活轮询节流计时
-  gLastRetryTime: int64     # 上次窗口重建尝试时间（限频，GetTickCount64 返回 int64）
-  gLastTitleCheck: int64    # 上次标题强制检查时间
-  gWindowMinimized = false  # 自己跟踪窗口状态，不依赖 IsIconic
   gPetVisible = true        # 悬浮宠物显示状态（2026-08-16 主定稿：默认打开；托盘开关控制）
   gFloatHwnd: HWND          # 悬浮宠物窗口句柄（托盘开关也要用）
 
-# ---------- 主窗口控制 ----------
+# ---------- 全局句柄 ----------
 
-var gMainFoundHwnd: HWND    # EnumWindows 回调结果缓存（标题命中 = 主窗口）
-var gMainCandidateHwnd: HWND  # 类名候选兜底（WebView* 首个命中，仅无标题命中时用）
 var gHostHwnd: HWND         # 托盘宿主窗口（宠物右键菜单 owner，菜单 WM_COMMAND 由托盘处理）
-
-proc enumMainWndProc(hwnd: HWND, lParam: LPARAM): WINBOOL {.stdcall.} =
-  ## EnumWindows 回调：找本进程的 webui 主窗口。
-  ## 2026-08-16 改为「标题优先」：主窗口标题恒为 "DeepSeek Harness"（forceMainWindowTitle
-  ## 每 5 秒强制），终端窗口（第二 WebView2 窗口）页面标题是 "DSH Terminal"——
-  ## 终端窗口类名同为 WebView*，若类名优先会被误判为主窗口（标题强制/尺寸记忆/消失
-  ## 重建全作用到终端窗口上）。故类名 WebView* 只作候选兜底，标题命中才立即返回。
-  ## 必须按进程过滤：浏览器等外部窗口标题可能与 dsh 页面相同（"DeepSeek Harness"），
-  ## 不排除会误匹配（实测：点击托盘拉起浏览器）
-  var wndPid: DWORD
-  discard GetWindowThreadProcessId(hwnd, wndPid.addr)
-  if wndPid != GetCurrentProcessId():
-    return TRUE
-  var title: array[256, WCHAR]
-  let tn = GetWindowTextW(hwnd, cast[LPWSTR](title.addr), 256)
-  if tn > 0:
-    const marker = "DeepSeek Harness"
-    for i in 0 ..< tn:
-      if tn - i >= 16:
-        var m = true
-        for j in 0 ..< 16:
-          if title[i + j] != WCHAR(marker[j]):
-            m = false
-            break
-        if m:
-          gMainFoundHwnd = hwnd
-          return FALSE
-  var cls: array[64, WCHAR]
-  let cn = GetClassNameW(hwnd, cast[LPWSTR](cls.addr), 64)
-  if cn > 0:
-    const prefix = "WebView"
-    var match = cn >= 7
-    for i in 0 ..< 7:
-      if cls[i] != WCHAR(prefix[i]):
-        match = false
-        break
-    if match and gMainCandidateHwnd == 0:
-      gMainCandidateHwnd = hwnd
-  return TRUE
-
-proc findMainWindow(): HWND =
-  ## 查找主窗口：EnumWindows 遍历，标题含 "DeepSeek Harness" 优先命中，
-  ## 类名 WebView* 候选兜底（无标题命中时用；第二 WebView2 窗口不受影响）
-  ## 比 FindWindow 可靠：webui 类名 A/W 注册差异 + 页面标题动态变化都会让
-  ## FindWindow 精确匹配失配（实测 FindWindowW("WebViewWindow") 偶发失败）
-  gMainFoundHwnd = 0
-  gMainCandidateHwnd = 0
-  discard EnumWindows(enumMainWndProc, LPARAM(0))
-  if gMainFoundHwnd != 0:
-    return gMainFoundHwnd
-  if gMainCandidateHwnd != 0:
-    return gMainCandidateHwnd
-  return FindWindowW(nil, "DeepSeek Harness".cstring)
-
-proc forceMainWindowTitle() =
-  ## 强制主窗口标题为 "DeepSeek Harness"（dsh web 前端会把会话标题拼进页面
-  ## title，窗口标题跟随变化；主要求固定标题）
-  let mw = findMainWindow()
-  if mw != 0:
-    var t: array[64, WCHAR]
-    let tn = GetWindowTextW(mw, cast[LPWSTR](t.addr), 64)
-    if tn != 16:
-      var buf: array[64, WCHAR]
-      let tip = "DeepSeek Harness"
-      for i in 0 ..< tip.len:
-        buf[i] = WCHAR(tip[i])
-      buf[tip.len] = WCHAR(0)
-      discard SetWindowTextW(mw, cast[LPCWSTR](buf.addr))
-      dbg("title forced to DeepSeek Harness")
-
-proc restoreMainWindow() =
-  ## 恢复/显示主窗口
-  let wnd = findMainWindow()
-  if wnd != 0:
-    discard ShowWindow(wnd, SW_SHOW)
-    discard ShowWindow(wnd, SW_RESTORE)
-    discard SetForegroundWindow(wnd)
-
-proc toggleMainWindow() =
-  ## 切换主窗口 显示/最小化（托盘和悬浮图标共用）
-  ## 2026-08-15 修复：实时读 IsIconic/IsWindowVisible，不依赖缓存状态——
-  ## 任务栏点击（Windows 默认处理）与托盘点击混合时，缓存状态会与实际脱节
-  ## （实测：点几次后窗口最小化弹不出）。
-  let wnd = findMainWindow()
-  if wnd != 0:
-    if IsIconic(wnd) == 1:
-      # 当前最小化 → 恢复
-      gWindowMinimized = false
-      discard ShowWindow(wnd, SW_RESTORE)
-      discard SetForegroundWindow(wnd)
-    elif IsWindowVisible(wnd) == 0:
-      # 当前不可见但非最小化（异常）→ 显示
-      # 注意：不能用 not IsWindowVisible(wnd)——Nim 的 not 对整数是位取反，
-      # not 1 = -2（非零为 true）导致可见窗口也走此分支（实测"闪一下不最小化"）
-      gWindowMinimized = false
-      discard ShowWindow(wnd, SW_SHOW)
-      discard ShowWindow(wnd, SW_RESTORE)
-      discard SetForegroundWindow(wnd)
-    else:
-      # 当前可见 → 最小化（用 webui 官方 API，走库内部保存的 hwnd）
-      gWindowMinimized = true
-      minimize(csize_t(gWindow))
-      # 兜底：若 webui API 未生效，再直接 ShowWindow
-      if IsIconic(wnd) != 1:
-        discard ShowWindow(wnd, SW_MINIMIZE)
-  else:
-    # 窗口不存在（被销毁）→ 重建（v10：任何场景都不让窗口消失变成"程序消失"）
-    dbg("toggle -> window missing, re-show")
-    gWindow.setSize(gLastW, gLastH)
-    discard gWindow.showWv(bootUrl())
-
-proc showMainWindowIfMissing() =
-  ## 托盘"打开 DSH"：窗口存在则恢复显示，不存在则重建
-  let wnd = findMainWindow()
-  if wnd != 0:
-    restoreMainWindow()
-  else:
-    dbg("tray open -> re-show window")
-    gWindow.setSize(gLastW, gLastH)
-    discard gWindow.showWv(bootUrl())
-
-proc onWebuiClose(window: csize_t): bool {.cdecl.} =
-  ## 点 ✕（或 Alt+F4）→ 最小化而不是关闭；退出只走托盘"退出"
-  ## 2026-08-16 主定稿：webui 官方 close handler（webui_set_close_handler_wv，
-  ## 回调在 webui 自己的窗口过程里被调用，不替换 WndProc、不碰窗口初始化）。
-  ## 返回 false = 吞掉 WM_CLOSE，窗口不销毁 → 不触发主循环 ~3s 自动重建，
-  ## 也绕开重建时 showWv 内部停旧 WebView 线程的最长 2.5s 同步等待（点✕卡顿根因）。
-  gWindowMinimized = true
-  let wnd = findMainWindow()
-  if wnd != 0:
-    discard ShowWindow(wnd, SW_MINIMIZE)
-  result = false
 
 # ---------- 托盘 ----------
 
@@ -270,12 +110,11 @@ proc toWs(s: string): wstring =
                               cast[LPWSTR](addr buf[0]), wlen)
   result = wstring(buf)
 
-proc openOriginalInBrowser() =
-  ## 后备入口：用系统默认浏览器打开原版 dsh web（无自定义元素）。
-  ## 客户端内嵌页因 dsh 升级/认证等暂时打不开时，一键用浏览器应急。
-  ## 带 token 打开：浏览器首次自动完成认证；已认证过的浏览器则直接进原版。
+proc openInBrowser() =
+  ## v2.2 主入口：用系统默认浏览器打开 dsh web（127.0.0.1:3080）。
+  ## 浏览器自身完成认证（cookie 已种则直接进）；带 token URL 幂等。
   let url = bootUrl()
-  dbg("open original in browser: " & url)
+  dbg("open browser: " & url)
   let wurl = toW(url)
   if wurl != nil:
     discard ShellExecuteW(0, nil, wurl, nil, nil, SW_SHOW)
@@ -285,11 +124,11 @@ proc openCmdDialog(cmd: string) =
   ## 用途：托盘一键切换纯净/完整 dsh 模式。因 dsh 在 WSL、切换需 sudo systemctl
   ## restart（sudo 无免密），exe 无法直接执行，改为"复制指令给用户去终端跑"。
   ## 复制指令到剪贴板（CF_UNICODETEXT）
-  # 打开剪贴板：传主窗口 hwnd 提高成功率；失败重试一次（托盘点击瞬时占用常见）
-  var clip = OpenClipboard(findMainWindow())
+  # 打开剪贴板：传宿主窗口 hwnd 提高成功率；失败重试一次（托盘点击瞬时占用常见）
+  var clip = OpenClipboard(gHostHwnd)
   if clip == 0:
     sleep(50)
-    clip = OpenClipboard(findMainWindow())
+    clip = OpenClipboard(gHostHwnd)
   if clip == 0:
     let mFail = toWs("打开剪贴板失败，请手动复制下面指令到 WSL bash（遇到提权输入密码）：\n\n" & cmd)
     discard MessageBoxW(0, mFail, toWs("DSH 模式切换"), 0)
@@ -317,8 +156,11 @@ proc openCmdDialog(cmd: string) =
 
 proc showTrayMenu(hwnd: HWND) =
   var hMenu = CreatePopupMenu()
-  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPEN, toW("打开 DSH（完整版）"))
-  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_BROWSER, toW("打开 DSH（纯净模式）"))
+  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPENWEB, toW("打开 DSH（默认浏览器）"))
+  discard AppendMenuW(hMenu, MF_SEPARATOR, 0, nil)
+  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_FULL, toW("切换：完整模式（复制指令）"))
+  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_CLEAN, toW("切换：纯净模式（复制指令）"))
+  discard AppendMenuW(hMenu, MF_SEPARATOR, 0, nil)
   if gPetVisible:
     discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_PET, toW("隐藏宠物"))
   else:
@@ -340,16 +182,19 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   case msg
   of WM_TRAYICON:
     if lParam == WM_LBUTTONUP or lParam == WM_LBUTTONDBLCLK:
-      toggleMainWindow()
+      openInBrowser()   # v2.2：左键单击托盘 = 默认浏览器打开 DSH
     elif lParam == WM_RBUTTONUP:
       showTrayMenu(hwnd)
     result = 0
   of WM_COMMAND:
     case LOWORD(wParam)
-    of ID_TRAY_OPEN:
+    of ID_TRAY_OPENWEB:
+      openInBrowser()
+      result = 0
+    of ID_TRAY_FULL:
       openCmdDialog("sudo bash ~/deepseek-harness/nim-client/dsh-mode.sh full")
       result = 0
-    of ID_TRAY_BROWSER:
+    of ID_TRAY_CLEAN:
       openCmdDialog("sudo bash ~/deepseek-harness/nim-client/dsh-mode.sh clean")
       result = 0
     of ID_TRAY_PET:
@@ -367,7 +212,6 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
       gQuitting = true
       gRunning = false
       discard Shell_NotifyIconW(NIM_DELETE, gTrayData.addr)
-      webui.exit()
       result = 0
     else:
       result = DefWindowProcW(hwnd, msg, wParam, lParam)
@@ -436,15 +280,13 @@ var
   gFishPixels: array[4, array[FISH_BIN_W * FISH_BIN_H, uint32]]
   gFishPixelsLoaded = false
   gPetColor = 0             # 0=蓝 1=黑 2=橙 3=绿（主循环低频轮询 3081 驱动）
-  gPetBaseColor = 0         # 基态色（非提问时颜色：打开=蓝 0，最小化=黑 1）——提问闪烁交替用
-  gPetBlinkOn = true        # 橙/绿心跳闪烁相位（信号色/基态交替）
+  gPetBaseColor = 0         # 基态色（v2.2 恒蓝 0；无窗口最小化概念）——提问闪烁交替用
+  gPetBlinkOn = true        # 橙心跳闪烁相位（信号色/基态交替）
   gPetBlinkTick: int64 = 0  # 心跳计时
   gPetPollTick: int64 = 0   # 宠物状态轮询计时（自适应间隔）
   gPetPollOk = false        # 上次轮询是否成功（成功 1s / 失败 5s 间隔）
   gAsking = false           # 是否正在提问/要授权（橙色心跳，来自状态文件）
-  gDoneReply = false        # 回复是否完成待确认（绿色心跳，2026-08-21 主需求）
-  gPetDoneAt = 0            # 最近一次 green 状态携带的 doneAt（时间戳）
-  gPetDoneAcked = false     # 本次 green 是否已回执（窗口置前后不再闪）
+  gDoneReply = false        # 回复是否完成（绿色常亮，来自状态文件；停闪由 3081 转蓝驱动）
   gDibBits: ptr UncheckedArray[uint32]   # DIB 像素（96x96 BGRA 预乘）
   gMemDC: HDC
 
@@ -461,17 +303,7 @@ proc applyPetIconColor() =
     gTrayData.hIcon = tIcon
     discard Shell_NotifyIconW(NIM_MODIFY, gTrayData.addr)
     if oldT != 0: discard DestroyIcon(oldT)
-  # 任务栏（ICON_SMALL=任务栏按钮，ICON_BIG=Alt+Tab 缩略图）
-  let mw = findMainWindow()
-  if mw != 0:
-    let bigIcon = loadWhaleIcon(32, dispColor)
-    let smallIcon = loadWhaleIcon(16, dispColor)
-    if bigIcon != 0:
-      let oldBig = SendMessageW(mw, WM_SETICON, ICON_BIG, LPARAM(bigIcon))
-      if oldBig != 0: discard DestroyIcon(HICON(oldBig))
-    if smallIcon != 0:
-      let oldSmall = SendMessageW(mw, WM_SETICON, ICON_SMALL, LPARAM(smallIcon))
-      if oldSmall != 0: discard DestroyIcon(HICON(oldSmall))
+  # v2.2：无 WebView 主窗口，任务栏图标逻辑移除（托盘图标即唯一状态灯）
 
 proc floatLoadFishBins() =
   ## 加载四色鲸鱼像素（0=蓝 1=黑 2=橙 3=绿；BGRA 预乘，小端）
@@ -585,7 +417,7 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
       gFloatDragging = false
       discard ReleaseCapture()
       if gFloatClicked:
-        toggleMainWindow()
+        openInBrowser()   # v2.2：单击鲸鱼 = 默认浏览器打开 DSH（原为呼出独立窗口）
     result = 0
   of WM_RBUTTONUP:
     # 宠物右键 → 托盘同款菜单（v14 新增；owner 用托盘宿主窗口，
@@ -776,155 +608,22 @@ proc setupAutostart() =
     discard RegCloseKey(hKey)
     echo "[自启] 已注册开机自启: ", exePath
 
-# ---------- 窗口尺寸记忆 ----------
-
-const SizeRegKey = "Software\\Bikini\\DSH-Nim-Client"
-
-proc saveWindowSize(w, h: int) =
-  var hKey: HKEY
-  if RegCreateKeyExW(HKEY_CURRENT_USER, SizeRegKey.cstring, 0, nil, 0,
-                     KEY_SET_VALUE, nil, hKey.addr, nil) == ERROR_SUCCESS:
-    var wv = DWORD(w)
-    var hv = DWORD(h)
-    discard RegSetValueExW(hKey, "Width".cstring, 0, REG_DWORD,
-                           cast[LPCBYTE](wv.addr), DWORD(sizeof(DWORD)))
-    discard RegSetValueExW(hKey, "Height".cstring, 0, REG_DWORD,
-                           cast[LPCBYTE](hv.addr), DWORD(sizeof(DWORD)))
-    discard RegCloseKey(hKey)
-
-proc loadWindowSize(): tuple[width, height: int] =
-  result = (1280, 820)
-  var hKey: HKEY
-  if RegOpenKeyExW(HKEY_CURRENT_USER, SizeRegKey.cstring, 0,
-                   KEY_QUERY_VALUE, hKey.addr) == ERROR_SUCCESS:
-    var wv, hv: DWORD
-    var size = DWORD(sizeof(DWORD))
-    if RegQueryValueExW(hKey, "Width".cstring, nil, nil,
-                        cast[LPBYTE](wv.addr), size.addr) == ERROR_SUCCESS:
-      if wv > 400 and wv < 4000: result.width = int(wv)
-    size = DWORD(sizeof(DWORD))
-    if RegQueryValueExW(hKey, "Height".cstring, nil, nil,
-                        cast[LPBYTE](hv.addr), size.addr) == ERROR_SUCCESS:
-      if hv > 300 and hv < 3000: result.height = int(hv)
-    discard RegCloseKey(hKey)
-
-proc trackWindowSize() =
-  let wnd = findMainWindow()
-  if wnd != 0:
-    var rect: RECT
-    if GetWindowRect(wnd, rect.addr):
-      let w = int(rect.right - rect.left)
-      let h = int(rect.bottom - rect.top)
-      if abs(w - gLastW) > 20 or abs(h - gLastH) > 20:
-        gLastW = w
-        gLastH = h
-        saveWindowSize(w, h)
-
-proc backendAlive(): bool =
-  ## 探测 127.0.0.1:3080 是否可达（TCP 握手，300ms 超时）
-  ## 后端不可达（WSL 重启/dsh web 挂）时停止窗口重建尝试，等后端恢复。
-  ## 注（2026-08-15 排查实证）：窗口异常消失元凶是 subclass 主窗口（干扰 webui
-  ## 初始化），不是 net 模块——3648 无 subclass + 本探活版本稳定无闪退。
-  try:
-    let s = newSocket()
-    defer: s.close()
-    s.connect("127.0.0.1", Port(3080), timeout = 300)
-    return true
-  except CatchableError:
-    return false
-
 proc fetchPetState(): int =
   ## 读 Windows 侧本地状态文件（终端服务写入），返回 0=蓝 1=黑 2=橙 3=绿。
   ## 2026-08-16 崩溃修复：原 HTTP 轮询（net 模块 send/recv）在 Windows 触发
   ## 0xc0000005 访问冲突导致进程崩溃；改为读本地文件（纯文件 I/O，零网络）。
   ## 路径动态化（2026-08-16 主定稿）：%USERPROFILE%\\pet-state.json——
   ## 服务端写 Windows 用户目录根，不再硬编码用户名，换机可部署。
-  ## 2026-08-21 扩展：green=回复完成待确认（携带 doneAt），读入 gPetDoneAt。
+  ## v2.2：green 停闪由浏览器页面聚焦通知 3081（server 转 blue），本壳只跟随文件。
   try:
     let body = readFile(getEnv("USERPROFILE") & "\\pet-state.json")
     if body.contains("\"pet\":\"blue\""): return 0
     if body.contains("\"pet\":\"black\""): return 1
     if body.contains("\"pet\":\"orange\""): return 2
-    if body.contains("\"pet\":\"green\""):
-      # 解析 doneAt（"doneAt":1234567890 形式）
-      let m = body.find("\"doneAt\":")
-      if m >= 0:
-        var i = m + 9
-        while i < body.len and body[i] in {'0'..'9'}: i.inc
-        gPetDoneAt = parseInt(body[m+9 ..< i])
-      return 3
+    if body.contains("\"pet\":\"green\""): return 3
     return -1
   except CatchableError:
     return -1
-
-proc writePetAck() =
-  ## 主窗口被提到最前 → 写回执文件 pet-ack.json（server 读到后把 green 转 blue）。
-  ## 2026-08-21 主需求：终止绿色信号=将 dsh 客户端窗口提到最前面。
-  try:
-    writeFile(getEnv("USERPROFILE") & "\\pet-ack.json",
-              "{\"doneAt\":" & $gPetDoneAt & "}")
-  except CatchableError:
-    discard
-
-proc minimizeMainWindow() =
-  ## 最小化主窗口（等同点击窗口最小化按钮）。
-  ## 2026-08-26 主需求：页面 L 手势（下→右）触发；逻辑与托盘 toggle 的最小化分支一致。
-  let wnd = findMainWindow()
-  if wnd != 0:
-    gWindowMinimized = true
-    minimize(csize_t(gWindow))
-    # 兜底：若 webui API 未生效，再直接 ShowWindow
-    if IsIconic(wnd) != 1:
-      discard ShowWindow(wnd, SW_MINIMIZE)
-
-# ---- 手势最小化：目录监控事件驱动（2026-08-27 主需求，替代每帧文件轮询）----
-# ReadDirectoryChangesW（OS 级目录变化通知）监控 %USERPROFILE% 目录：
-# minimize-flag.json 出现/被改写 → 删除并置内存标志 gMinimizeRequested。
-# 主循环每帧只查内存布尔（零文件系统轮询、零延迟）。
-var gMinimizeRequested = false   # bool 跨线程读写（x86 原子、无 GC 引用，线程安全足够）
-var gMinimizeWatchStop = false
-
-proc wideToNarrow(pw: ptr WCHAR, len: int): string =
-  ## UTF-16 宽字符 → UTF-8（WideCharToMultiByte，监控文件名解析用）
-  if len <= 0: return ""
-  let needed = WideCharToMultiByte(CP_UTF8, 0, pw, int32(len), nil, 0, nil, nil)
-  if needed <= 0: return ""
-  result = newString(needed)
-  discard WideCharToMultiByte(CP_UTF8, 0, pw, int32(len), result.cstring, needed, nil, nil)
-
-proc watchMinimizeThread() {.thread.} =
-  ## 监控 Windows 用户目录（事件驱动）：minimize-flag.json 出现即消费。
-  ## 同时监控文件创建与内容改写（写覆盖场景），匹配文件名即处理，幂等安全。
-  let dir = getEnv("USERPROFILE")
-  let hDir = CreateFileW(newWideCString(dir), FILE_LIST_DIRECTORY,
-                         FILE_SHARE_READ or FILE_SHARE_WRITE or FILE_SHARE_DELETE,
-                         nil, OPEN_EXISTING, FILE_FLAG_BACKUP_SEMANTICS, 0)
-  if hDir == INVALID_HANDLE_VALUE:
-    dbg("minimize watch: open dir failed")
-    return
-  var buf: array[64 * 1024, byte]
-  while not gMinimizeWatchStop:
-    var bytesReturned: DWORD
-    if ReadDirectoryChangesW(hDir, addr buf[0], DWORD(buf.len), 0,
-                             FILE_NOTIFY_CHANGE_FILE_NAME or FILE_NOTIFY_CHANGE_LAST_WRITE,
-                             addr bytesReturned, nil, nil) == 0:
-      dbg("minimize watch: ReadDirectoryChangesW failed")
-      break
-    var p = cast[PFILE_NOTIFY_INFORMATION](addr buf[0])
-    var guard = 0
-    while true:
-      guard.inc
-      if guard > 64: break
-      let nameChars = int(p.FileNameLength) div 2
-      var fname = ""
-      if nameChars > 0:
-        fname = wideToNarrow(addr p.FileName[0], nameChars)
-      if fname == "minimize-flag.json":
-        try: removeFile(dir & "\\minimize-flag.json") except CatchableError: discard
-        gMinimizeRequested = true
-      if p.NextEntryOffset == 0: break
-      p = cast[PFILE_NOTIFY_INFORMATION](cast[int](p) + int(p.NextEntryOffset))
-  CloseHandle(hDir)
 
 # ---------- 主流程 ----------
 
@@ -945,61 +644,19 @@ when isMainModule:
     echo "[DSH-Nim] 托盘已就绪"
     dbg("tray ok")
 
-  # 打开 webui 窗口（嵌入式 WebView）
-  # 关键：dsh web 不加载 webui.js，不建立 webui WebSocket 连接，
-  # 默认 15 秒超时会把窗口判"未连接"关闭 → 必须 setTimeout(0) 无限等待。
-  setTimeout(0)
-  # 先设置尺寸再显示（webui 创建窗口时读 win->width/height，避免闪默认大小）
-  let saved = loadWindowSize()
-  gWindow = newWindow()
-  gWindow.setSize(saved.width, saved.height)
-  gLastW = saved.width
-  gLastH = saved.height
-  dbg("before showWv")
-  let shown = gWindow.showWv(bootUrl())
-  dbg("after showWv shown=" & $shown)
-
-  # 点 ✕ = 最小化（webui 官方 close handler，退出只走托盘"退出"）
-  set_close_handler_wv(csize_t(gWindow), onWebuiClose)
-  dbg("close handler registered")
-
-  # 悬浮鲸鱼图标（主窗口创建后再初始化，避免影响 webui 窗口）
+  # 悬浮鲸鱼（v2.2：无 WebView 主窗口，直接初始化宠物壳）
   dbg("before floatInit")
   floatInit()
   dbg("after floatInit")
 
-  # 手势最小化监控线程（事件驱动，2026-08-27 主需求）
-  var watchThread: Thread[void]
-  createThread(watchThread, watchMinimizeThread)
-  dbg("minimize watch thread started")
-
-  # 设置窗口鲸鱼图标
-  sleep(2000)
-  let wnd = findMainWindow()
-  if wnd != 0:
-    let bigIcon = loadWhaleIcon(32)
-    let smallIcon = loadWhaleIcon(16)
-    discard SendMessageW(wnd, WM_SETICON, ICON_BIG, LPARAM(bigIcon))
-    discard SendMessageW(wnd, WM_SETICON, ICON_SMALL, LPARAM(smallIcon))
-
-  # 主循环：webui 事件 + Win32 消息（非阻塞共存）
+  # 主循环：Win32 消息泵（托盘/宠物）+ 宠物状态轮询（纯文件 I/O，零网络）
   var msg: MSG
-  var mainSeen = false  # 主窗口是否出现过（用于关闭检测）
   while gRunning:
     while PeekMessageW(msg.addr, 0, 0, 0, PM_REMOVE):
       discard TranslateMessage(msg.addr)
       discard DispatchMessageW(msg.addr)
-    discard waitAsync()
-    trackWindowSize()
-    # 标题强制（5 秒低频；dsh web 前端把会话标题拼进页面 title，窗口标题会跟随）
-    let tickT = GetTickCount64()
-    if tickT - gLastTitleCheck > 5000:
-      gLastTitleCheck = tickT
-      forceMainWindowTitle()
 
-    # 鼠标交互：鼠标进入放置位置 150px 半径范围 → 鲸鱼慢慢游向鼠标
-    # （不依赖鼠标消息：WM_NCHITTEST 透明区穿透，鼠标消息收不到，
-    #   改用 GetCursorPos 轮询，穿透区也能感知）
+    # 鼠标交互：鲸鱼游向鼠标（GetCursorPos 轮询，透明穿透区也感知）
     if not gFloatDragging:
       var mpt: POINT
       if GetCursorPos(mpt.addr):
@@ -1018,128 +675,36 @@ when isMainModule:
     else:
       gMouseInside = false  # 拖动时不跟随
 
-    # 同步窗口最小化状态
-    let mw = findMainWindow()
-    if mw != 0:
-      mainSeen = true
-      gWindowMinimized = IsIconic(mw) == 1
-
-    # 窗口消失处理（v13 最终：无任何 webui 窗口挂钩，经主实测稳定不闪退）
-    # 排查实证（2026-08-15）：subclass 与 close handler 等对 webui 窗口的挂钩
-    # 都会干扰窗口初始化导致异常消失（v10/v12 实测闪退）；v13 无挂钩：
-    # 窗口消失 → 后端可达则限频自动重建（点 ✕ 会弹回，退出走托盘"退出"），
-    # 后端不可达（WSL 重启/dsh web 挂）→ 停止重建等恢复。
-    if not gQuitting and mainSeen:
-      let wnd = findMainWindow()
-      if wnd == 0:
-        inc gCloseCount
-        if gCloseCount > 180 and not gBackendDown:  # 约 3 秒持续不存在才重建（防页面刷新误触发）
-          let nowT = GetTickCount64()
-          if nowT - gLastRetryTime > 3000:  # 限频 3 秒重建
-            if backendAlive():
-              dbg("window gone -> re-show")
-              gLastRetryTime = nowT
-              gWindow.setSize(gLastW, gLastH)
-              discard gWindow.showWv(bootUrl())
-            else:
-              dbg("backend down -> wait")
-              gBackendDown = true
-          gCloseCount = 0
-      else:
-        gCloseCount = 0
-        gBackendDown = false
-
-    # 断连恢复：后端回来了 → 重建主窗口（webui 对已销毁窗口会重新创建）
-    if gBackendDown and backendAlive():
-      dbg("backend recovered -> re-show")
-      gWindow.setSize(gLastW, gLastH)
-      discard gWindow.showWv(bootUrl())
-      gBackendDown = false
-
-    # ---- 后端重启检测：restart dsh-web 后自动刷新内嵌页面（2026-08-21 主要求）----
-    # 场景：主在终端执行 sudo systemctl restart dsh-web → 3080 短暂不可达 → WebView2
-    # 页面加载失败（浏览器不会自动重试失败的页面）→ 后端恢复后 navigate 刷新一次。
-    # 与上面 gBackendDown（窗口消失→重建）互补：窗口还在但页面断了 → 走 navigate（不重建）。
-    # 独立节流轮询：1 秒一次（backendAlive 是 TCP 连接探测，本地回环失败即时返回）。
-    let nowTick = GetTickCount64()
-    if nowTick - gBackendCheckTick >= 1000:
-      gBackendCheckTick = nowTick
-      let alive = backendAlive()
-      if not alive and not gBackendWasDown:
-        gBackendWasDown = true
-        dbg("backend unreachable detected")
-      elif alive and gBackendWasDown:
-        gBackendWasDown = false
-        dbg("backend recovered -> navigate refresh")
-        if findMainWindow() != 0:
-          waitTokenStable()   # 等 token-sync 把新 launch token 写入并稳定（避免读到旧 token 导致 401）
-          gWindow.navigate(bootUrl())
-          dbg("navigate to " & bootUrl())
-
-    # ---- 宠物颜色：提问(橙,文件) > 回复完成(绿,文件) > 主窗口打开(蓝) > 最小化/未现(黑) ----
-    # 2026-08-16 主定稿：颜色跟随客户端主窗口状态（打开=黑、最小化=蓝）；
-    # 2026-08-21 主调整：交换基态色——打开=蓝、最小化=黑（更符合直觉）；
-    # 提问橙色/回复完成绿色由状态文件驱动（客户端本地零网络）。
+    # ---- 宠物颜色：提问(橙,文件) > 回复完成(绿,文件) > 基态(蓝) ----
+    # v2.2：无主窗口概念 → 基态恒蓝(0)，黑(1)不再使用；绿色停闪由浏览器
+    # 页面聚焦通知 3081（server 把 pet-state 转 blue），本壳只跟随文件颜色。
     let petTick = GetTickCount64()
     let pollGap = if gPetPollOk: 1000 else: 5000   # 失败拉长间隔，少打扰主循环
     if petTick - gPetPollTick > pollGap:
       gPetPollTick = petTick
-      let prevDoneAt = gPetDoneAt
       let c = fetchPetState()
       gPetPollOk = c >= 0
       gAsking = c == 2
       gDoneReply = c == 3
-      if c == 3 and gPetDoneAt != prevDoneAt:
-        gPetDoneAcked = false   # 新的一轮回复完成 → 重新需要提示
-      if c != 3:
-        gPetDoneAcked = false   # 离开 green 状态复位回执标记
-    # ---- L 手势最小化：事件驱动（监控线程置内存标志，零文件轮询、零延迟）----
-    if gMinimizeRequested:
-      gMinimizeRequested = false
-      minimizeMainWindow()
-    # 基态色（非提问时颜色：打开=蓝 0 / 最小化=黑 1）——提问/完成闪烁与它交替
-    gPetBaseColor = if mainSeen and not gWindowMinimized: 0 else: 1
+    gPetBaseColor = 0   # 基态恒蓝（2026-09-06 v2.2：无窗口最小化概念）
     var target = 0
     if gAsking:
       target = 2
-    elif gDoneReply and not gPetDoneAcked:
+    elif gDoneReply:
       target = 3
-    elif mainSeen and not gWindowMinimized:
-      target = 0
     else:
-      target = 1
+      target = 0
     if target != gPetColor:
       gPetColor = target
       gPetBlinkOn = true
       floatPaint(gFloatHwnd)
-      # 托盘 + 任务栏图标跟随宠物颜色（蓝/黑/橙/绿同色；含旧句柄释放）
-      applyPetIconColor()
+      applyPetIconColor()   # 托盘图标跟随宠物色（蓝/橙/绿）
       dbg("pet color -> " & $target)
-    if gPetColor == 2 or gPetColor == 3:
-      if petTick - gPetBlinkTick >= 400:
-        gPetBlinkTick = petTick
-        # 2026-08-27 主需求：回复完成绿色常亮不闪烁（原橙/绿同法闪烁）
-        # 仅提问橙色保留心跳闪烁；绿色固定画 target 色（gPetBlinkOn 恒 true）
-        if gPetColor == 2:
-          gPetBlinkOn = not gPetBlinkOn
-          floatPaint(gFloatHwnd)
-          # 托盘/任务栏与宠物同相位交替闪烁（橙 ↔ 基态色）
-          applyPetIconColor()
-        elif not gPetBlinkOn:
-          gPetBlinkOn = true
-          floatPaint(gFloatHwnd)
-          applyPetIconColor()
-        # 绿色常亮中：主把窗口提到最前 → 回执并停绿（2026-08-21 主需求保留）
-        if gPetColor == 3 and not gPetDoneAcked:
-          let fg = GetForegroundWindow()
-          let mw = findMainWindow()
-          if fg != 0 and mw != 0 and fg == mw:
-            gPetDoneAcked = true
-            writePetAck()
-            gPetColor = gPetBaseColor
-            gPetBlinkOn = true
-            floatPaint(gFloatHwnd)
-            applyPetIconColor()
-            dbg("pet green acked (window foreground)")
+    # 提问(橙)心跳闪烁；回复完成(绿)常亮不闪（2026-08-27 主需求：绿不闪）
+    if gPetColor == 2 and petTick - gPetBlinkTick >= 400:
+      gPetBlinkTick = petTick
+      gPetBlinkOn = not gPetBlinkOn
+      floatPaint(gFloatHwnd)
+      applyPetIconColor()
 
     sleep(FLOAT_ANIM_MS)

@@ -21,7 +21,17 @@ window.__ModuleLoader__.load({
 		const XTERM_JS = "http://127.0.0.1:3081/vendor/xterm/xterm.js";
 		const XTERM_FIT_JS = "http://127.0.0.1:3081/vendor/fit/addon-fit.js";
 		const BALANCE_URL = "http://127.0.0.1:3081/api/balance";
-		const MINIMIZE_URL = "http://127.0.0.1:3081/api/minimize";   // L 手势（下→右）最小化客户端
+		// v2.2 浏览器化：页面聚焦/可见 = 主已看到回复 → 通知 3081 停绿闪回执
+		// （原 Nim WebView 版靠"窗口置前写 pet-ack.json"，浏览器方案由页面自己上报）
+		const PET_ACK_URL = "http://127.0.0.1:3081/api/pet-ack";
+		function notifyPetAck() {
+			fetch(PET_ACK_URL, { method: "POST", mode: "cors", headers: { "Content-Type": "application/json" }, body: "{}" })
+				.catch(() => {});
+		}
+		document.addEventListener("visibilitychange", () => {
+			if (document.visibilityState === "visible") notifyPetAck();
+		});
+		window.addEventListener("focus", notifyPetAck);
 		const DOCK_ID = "dsh-panels-dock";
 		const TERM_PANEL_ID = "dsh-term-panel";
 		const TERM_HOST_ID = "dsh-term-host";
@@ -1105,28 +1115,6 @@ window.__ModuleLoader__.load({
 				}
 				return false;
 			}
-			// L 形手势（下→右，各段 ±30° 锥）：先向下累计 >= SEG_MIN（垂直 ±30° 内），
-			// 再向右累计 >= SEG_MIN（水平 ±30° 内）→ 最小化客户端（主 2026-08-26 定；08-27 实测 15° 太严改 30°）
-			function isLMinimizeGesture() {
-				const pts = pathPoints;
-				if (pts.length < 6) return false;
-				const TAN30 = Math.tan(Math.PI / 6);   // 30° 锥：|dx| <= |dy| * tan30
-				// 第一段：向下（屏幕正下方 30° 锥内）累计 >= SEG_MIN
-				let downEnd = -1;
-				for (let i = 1; i < pts.length; i++) {
-					const dy = pts[i][1] - pts[0][1];             // 向下为正
-					const dx = Math.abs(pts[i][0] - pts[0][0]);
-					if (dy >= SEG_MIN && dx <= dy * TAN30) { downEnd = i; break; }
-				}
-				if (downEnd < 0) return false;
-				// 第二段：向右（屏幕正右方 30° 锥内，dx 确实为正）累计 >= SEG_MIN
-				for (let j = downEnd + 1; j < pts.length; j++) {
-					const dx = pts[j][0] - pts[downEnd][0];       // 向右为正
-					const dy = Math.abs(pts[j][1] - pts[downEnd][1]);
-					if (dx >= SEG_MIN && dy <= dx * TAN30) return true;
-				}
-				return false;
-			}
 			// 总体方向：起点→终点的位移向量，判断是否在正上/正下 60° 锥内
 			// 返回 "up"（正上方锥内）| "down"（正下方锥内）| null（斜向/横向，不动作）
 			function overallDirection() {
@@ -1148,11 +1136,7 @@ window.__ModuleLoader__.load({
 				showTrail(e.clientX, e.clientY);
 				if (active) {
 					const sc = findScrollable(e.target);
-					if (isLMinimizeGesture()) {
-						// L 形（下→右 ±15°）→ 最小化客户端（等同点击窗口最小化按钮）
-						showHint(e.clientX, e.clientY, "最小化");
-						fetch(MINIMIZE_URL, { method: "POST", mode: "cors" }).catch(() => {});
-					} else if (isRefreshGesture()) {
+					if (isRefreshGesture()) {
 						// 严格先上后下（60° 锥内）→ 刷新页面
 						showHint(e.clientX, e.clientY, "刷新");
 						location.reload();
