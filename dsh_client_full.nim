@@ -177,19 +177,24 @@ proc showTrayMenu(hwnd: HWND) =
 # term-panels 每 1.5s 把页面标题固定为 "DeepSeek Harness"（PWA 独立窗口与浏览器
 # 标签的窗口标题都稳定为该值），本壳据此枚举找 dsh 对话窗口做切换。
 var gFoundDshHwnd: HWND
+var gDshLaunchTick: int64 = 0  # 最近一次拉起 PWA 的时刻（防 2s 内重复点击重复开窗）
 
 proc findDshWndProc(hwnd: HWND, lParam: LPARAM): WINBOOL {.stdcall.} =
-  # 标题"包含" DeepSeek Harness 即命中（term-panels 固定精确值；官方页面若把
-  # 会话标题拼进 title（"xxx - DeepSeek Harness" 或反序）也能命中），避免每点一次
-  # 找不到窗口重复开新 PWA 窗口（2026-09-06 主实测问题）
+  # 大小写不敏感匹配品牌词 "deepseek"（主实测纯净模式官方页面标题形如
+  # "deepseek harness -<会话>——deepseekharness" 全小写/连写变体；term-panels
+  # 固定版为 "DeepSeek Harness" 大写），统一 ASCII 小写后查子串——两模式都能
+  # 命中 dsh 对话窗口，避免每点一次找不到窗口重复开新 PWA 窗口
   var title: array[256, WCHAR]
   let tn = GetWindowTextW(hwnd, cast[LPWSTR](title.addr), 256)
-  if tn >= 16:
-    const marker = "DeepSeek Harness"
-    for i in 0 .. tn - 16:
+  if tn >= 8:
+    const marker = "deepseek"          # 8 字符全小写
+    for i in 0 .. tn - 8:
       var m = true
-      for j in 0 ..< 16:
-        if title[i + j] != WCHAR(marker[j]): m = false; break
+      for j in 0 ..< 8:
+        var ch = int(title[i + j])
+        if ch > 127: m = false; break   # 非 ASCII 字符直接失败（防中文低位误匹配）
+        if ch >= 65 and ch <= 90: ch += 32   # A-Z → a-z
+        if ch != ord(marker[j]): m = false; break
       if m:
         gFoundDshHwnd = hwnd
         return FALSE
@@ -363,7 +368,6 @@ var
   gPetBlinkTick: int64 = 0  # 心跳计时
   gDshWinTick: int64 = 0    # dsh 窗口状态轮询计时（命中后 50ms 快查 / 未命中 1s 枚举）
   gDshHwnd: HWND = 0        # 命中的 dsh 对话窗口句柄缓存（避免反复全系统 EnumWindows）
-  gDshLaunchTick: int64 = 0 # 最近一次拉起 PWA 的时刻（防 2s 内重复点击重复开窗）
   gDshMinimized = true      # dsh 对话窗口(PWA)收起态（最小化或未开；启动默认收起=黑）
   gPetPollTick: int64 = 0   # 宠物状态轮询计时（自适应间隔）
   gPetPollOk = false        # 上次轮询是否成功（成功 1s / 失败 5s 间隔）

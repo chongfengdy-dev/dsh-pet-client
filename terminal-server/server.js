@@ -94,6 +94,7 @@ app.post('/api/background', (req, res) => {
 // → 写 %USERPROFILE%\pet-ack.json {doneAt} 回执；server 见 ack.doneAt >= green.doneAt
 // → 转回 blue（主已看到回复）。ack 文件由 Nim 只写、server 只读。
 let petState = { pet: 'blue' };
+const GREEN_WINDOW_MS = 5 * 60 * 1000;   // 回复完成绿色提醒窗口：5 分钟内未确认仍提示，超时自动转蓝（纯净模式无页面 ack 的兜底）
 function winUserHome() {
   // WSL 里解析 Windows 用户目录：/mnt/c/Users/<用户名>/（只取目录、排除系统内置与隐藏）
   try {
@@ -296,7 +297,10 @@ function runAskDetection() {
         const r = JSON.parse(stdout);
         if (r.asking) {
           petState = { pet: 'orange' };
-        } else if (r.done && !(readPetAck() >= (r.doneAt || 0))) {
+        } else if (r.done && !(readPetAck() >= (r.doneAt || 0)) &&
+                   (!r.doneAt || Date.now() - r.doneAt <= GREEN_WINDOW_MS)) {
+          // 绿色仅在回复完成 GREEN_WINDOW_MS 内提醒；超时自动转蓝——
+          // 纯净模式无 term-panels 页面 ack，若无时间窗会永远绿（2026-09-06 主实测）
           petState = { pet: 'green', doneAt: r.doneAt || Date.now() };
         } else {
           petState = { pet: 'blue' };
