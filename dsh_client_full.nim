@@ -756,6 +756,10 @@ when isMainModule:
   floatInit()
   dbg("after floatInit")
 
+  # v2.2 主需求：启动即自动拉起 PWA 对话窗口（出现鲸鱼 + 打开对话，等效旧版开机开窗；
+  # 窗口已在则不重复开）。无 PWA 回落默认浏览器打开 3080。
+  toggleDshApp()
+
   # 主循环：Win32 消息泵（托盘/宠物）+ 宠物状态轮询（纯文件 I/O，零网络）
   var msg: MSG
   while gRunning:
