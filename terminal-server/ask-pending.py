@@ -41,11 +41,15 @@ def main():
     called = {}       # ask_user_question: callId -> 最近 call 时间
     answered = set()  # ask_user_question: 出现过 result → 已答
     ask_asked = ask_decided = 0   # approval 计数（10 分钟窗口内）
-    # ---- 回复完成判定（turn 配对）----
+    # ---- 回复完成判定（turn 顺序配对，2026-09-06 修复）----
+    # dsh 0.1.2 事件流 turn/start|turn/end 行无 "turn":N 字段（仅 type/seq/time），
+    # 旧版按 turn 号配对永远匹配不上 → done 恒 false、绿闪永不触发。
+    # 改为顺序配对：turn/start 开启区间，区间内出现 user/message 记为"用户提问轮"；
+    # turn/end(kind=completed) 关闭区间并记录 (time, has_user)。
     last_user_msg = None      # 最后 user/message 时间
-    current_turn = None       # 当前进行中 turn 号（最近 turn/start）
-    turn_has_user = {}        # turn 号 -> 该轮内是否有 user/message
-    last_turn_end = None      # 最后一个 turn/end(completed): {turn, time}
+    turn_active = False       # 是否处于 turn/start..turn/end 区间
+    cur_has_user = False      # 当前区间内是否出现过 user/message
+    last_completed_end = None # 最后一个 completed turn/end: (time, has_user)
     try:
         d = zstandard.ZstdDecompressor()
         with open(f, 'rb') as fh:
@@ -76,35 +80,33 @@ def main():
                             if tm and now - int(tm.group(1)) <= ASK_WINDOW_MS:
                                 ask_decided += 1
                         elif b'"type":"turn/start"' in line:
-                            m = re.search(rb'"turn":\s*"?(\d+)"?', line)
-                            if m:
-                                current_turn = int(m.group(1))
-                                turn_has_user[current_turn] = False
+                            turn_active = True
+                            cur_has_user = False
                         elif b'"type":"user/message"' in line:
                             tm = TIME_RE.search(line)
                             if tm:
                                 last_user_msg = int(tm.group(1))
-                                if current_turn is not None:
-                                    turn_has_user[current_turn] = True
+                                if turn_active:
+                                    cur_has_user = True
                         elif b'"type":"turn/end"' in line:
-                            m = re.search(rb'"turn":\s*"?(\d+)"?', line)
                             tm = TIME_RE.search(line)
-                            if m and tm:
-                                t = int(m.group(1))
+                            if tm:
                                 # 只认 completed 结束（进行中/中断不算完成）
                                 if b'"kind":"completed"' in line:
-                                    last_turn_end = {'turn': t, 'time': int(tm.group(1))}
+                                    last_completed_end = (int(tm.group(1)), cur_has_user)
+                            turn_active = False
+                            cur_has_user = False
     except Exception:
         pass
     ask_pending = any((now - t) <= ASK_WINDOW_MS and cid not in answered
                       for cid, t in called.items())
     approval_pending = ask_asked > ask_decided
-    # 回复完成：最后一个 turn/end(completed) 存在，其 turn 内有 user/message（用户提问触发），
+    # 回复完成：最后一个 turn/end(completed) 存在，其区间内有 user/message（用户提问触发），
     # 且该轮之后没有更新的 user/message（新提问未完成前不算旧轮完成）
     done = False
     done_at = None
-    if last_turn_end is not None and turn_has_user.get(last_turn_end['turn'], False):
-        t = last_turn_end['time']
+    if last_completed_end is not None and last_completed_end[1]:
+        t = last_completed_end[0]
         # 该轮结束后没有再发新的提问（最后 user/message 时间 < turn/end 时间）
         if last_user_msg is None or last_user_msg <= t:
             done = True

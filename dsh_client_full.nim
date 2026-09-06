@@ -26,7 +26,7 @@ const
                             # 稳定关键是无窗口挂钩，见主循环注释）
   # 托盘自定义消息
   WM_TRAYICON = WM_APP + 1
-  ID_TRAY_OPENWEB = 1       # 打开 DSH（默认浏览器）
+  ID_TRAY_OPENWEB = 1       # 打开 DSH（独立窗口/PWA）
   ID_TRAY_FULL = 2          # 切换：完整模式（复制指令）
   ID_TRAY_CLEAN = 3         # 切换：纯净模式（复制指令）
   ID_TRAY_PET = 4           # 显示/隐藏宠物开关
@@ -156,7 +156,7 @@ proc openCmdDialog(cmd: string) =
 
 proc showTrayMenu(hwnd: HWND) =
   var hMenu = CreatePopupMenu()
-  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPENWEB, toW("打开 DSH（默认浏览器）"))
+  discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_OPENWEB, toW("打开 DSH（独立窗口）"))
   discard AppendMenuW(hMenu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_FULL, toW("切换：完整模式（复制指令）"))
   discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_CLEAN, toW("切换：纯净模式（复制指令）"))
@@ -174,6 +174,70 @@ proc showTrayMenu(hwnd: HWND) =
                          pt.x, pt.y, 0, hwnd, nil)
   discard DestroyMenu(hMenu)
 
+# ---------- dsh 对话窗口切换（v2.2.1：PWA 独立窗口/浏览器标签 呼出↔最小化） ----------
+# term-panels 每 1.5s 把页面标题固定为 "DeepSeek Harness"（PWA 独立窗口与浏览器
+# 标签的窗口标题都稳定为该值），本壳据此枚举找 dsh 对话窗口做切换。
+var gFoundDshHwnd: HWND
+
+proc findDshWndProc(hwnd: HWND, lParam: LPARAM): WINBOOL {.stdcall.} =
+  var title: array[256, WCHAR]
+  let tn = GetWindowTextW(hwnd, cast[LPWSTR](title.addr), 256)
+  if tn == 16:
+    const marker = "DeepSeek Harness"
+    var m = true
+    for j in 0 ..< 16:
+      if title[j] != WCHAR(marker[j]): m = false; break
+    if m:
+      gFoundDshHwnd = hwnd
+      return FALSE
+  return TRUE
+
+proc findDshWindow(): HWND =
+  gFoundDshHwnd = 0
+  discard EnumWindows(findDshWndProc, LPARAM(0))
+  result = gFoundDshHwnd
+
+proc findPwaShortcut(): string =
+  ## 开始菜单递归找已安装的 PWA 快捷方式（文件名含 "DeepSeek Harness" 的 .lnk）。
+  ## 路径动态化：扫 %APPDATA%/%ProgramData% 的 Start Menu\Programs，PWA 安装目录名
+  ## 随浏览器而异（Cent Browser 应用/Edge 应用/Firefox Web 应用…），故不硬编码。
+  const roots = [getEnv("APPDATA") & "\\Microsoft\\Windows\\Start Menu\\Programs",
+                 getEnv("ProgramData") & "\\Microsoft\\Windows\\Start Menu\\Programs"]
+  for root in roots:
+    if root.len <= 10 or not dirExists(root): continue
+    for kind, p in walkDir(root):          # 第一层（直接放 Programs 根）
+      if kind == pcFile and p.toLowerAscii().endsWith(".lnk") and
+         p.toLowerAscii().contains("deepseek harness"): return p
+    for kind1, d in walkDir(root):         # 第二层（<浏览器名> 应用/ 目录内）
+      if kind1 == pcDir:
+        for kind2, p in walkDir(d):
+          if kind2 == pcFile and p.toLowerAscii().endsWith(".lnk") and
+             p.toLowerAscii().contains("deepseek harness"): return p
+  return ""
+
+proc toggleDshApp() =
+  ## 点鲸鱼/托盘「打开 DSH」：对话窗口(PWA/浏览器标签)已开 → 呼出/最小化切换；
+  ## 未开 → 优先拉起已安装 PWA 独立窗口(.lnk)，无 PWA → 回落默认浏览器打开 3080。
+  let wnd = findDshWindow()
+  if wnd != 0:
+    if IsIconic(wnd) == 1:                      # 最小化 → 呼出
+      discard ShowWindow(wnd, SW_RESTORE)
+      discard SetForegroundWindow(wnd)
+    elif IsWindowVisible(wnd) == 0:             # 隐藏（异常）→ 显示
+      discard ShowWindow(wnd, SW_SHOW)
+      discard ShowWindow(wnd, SW_RESTORE)
+      discard SetForegroundWindow(wnd)
+    else:                                       # 可见 → 最小化
+      discard ShowWindow(wnd, SW_MINIMIZE)
+    return
+  let lnk = findPwaShortcut()                   # 无窗口 → 拉起 PWA
+  if lnk.len > 0:
+    dbg("launch PWA: " & lnk)
+    let w = toW(lnk)
+    if w != nil: discard ShellExecuteW(0, nil, w, nil, nil, SW_SHOW)
+  else:
+    openInBrowser()                             # 未装 PWA → 回落默认浏览器
+
 proc floatPaint(hwnd: HWND)  # 前向声明（托盘 wndProc 与 floatWndProc 都会调用）
 
 # ---------- 宿主窗口过程（托盘） ----------
@@ -182,14 +246,14 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
   case msg
   of WM_TRAYICON:
     if lParam == WM_LBUTTONUP or lParam == WM_LBUTTONDBLCLK:
-      openInBrowser()   # v2.2：左键单击托盘 = 默认浏览器打开 DSH
+      toggleDshApp()    # v2.2.1：左键托盘 = dsh 窗口呼出/最小化切换（PWA 优先）
     elif lParam == WM_RBUTTONUP:
       showTrayMenu(hwnd)
     result = 0
   of WM_COMMAND:
     case LOWORD(wParam)
     of ID_TRAY_OPENWEB:
-      openInBrowser()
+      toggleDshApp()
       result = 0
     of ID_TRAY_FULL:
       openCmdDialog("sudo bash ~/deepseek-harness/nim-client/dsh-mode.sh full")
@@ -280,9 +344,12 @@ var
   gFishPixels: array[4, array[FISH_BIN_W * FISH_BIN_H, uint32]]
   gFishPixelsLoaded = false
   gPetColor = 0             # 0=蓝 1=黑 2=橙 3=绿（主循环低频轮询 3081 驱动）
-  gPetBaseColor = 0         # 基态色（v2.2 恒蓝 0；无窗口最小化概念）——提问闪烁交替用
+  gPetBaseColor = 0         # 基态色（v2.2.1：dsh 窗口可见=蓝0 / 最小化或未开=黑1）——提问闪烁交替用
   gPetBlinkOn = true        # 橙心跳闪烁相位（信号色/基态交替）
   gPetBlinkTick: int64 = 0  # 心跳计时
+  gDshWinTick: int64 = 0    # dsh 窗口状态轮询计时（命中后 50ms 快查 / 未命中 1s 枚举）
+  gDshHwnd: HWND = 0        # 命中的 dsh 对话窗口句柄缓存（避免反复全系统 EnumWindows）
+  gDshMinimized = true      # dsh 对话窗口(PWA)收起态（最小化或未开；启动默认收起=黑）
   gPetPollTick: int64 = 0   # 宠物状态轮询计时（自适应间隔）
   gPetPollOk = false        # 上次轮询是否成功（成功 1s / 失败 5s 间隔）
   gAsking = false           # 是否正在提问/要授权（橙色心跳，来自状态文件）
@@ -417,7 +484,7 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
       gFloatDragging = false
       discard ReleaseCapture()
       if gFloatClicked:
-        openInBrowser()   # v2.2：单击鲸鱼 = 默认浏览器打开 DSH（原为呼出独立窗口）
+        toggleDshApp()    # v2.2.1：单击鲸鱼 = dsh 窗口呼出/最小化切换（原为独立窗口）
     result = 0
   of WM_RBUTTONUP:
     # 宠物右键 → 托盘同款菜单（v14 新增；owner 用托盘宿主窗口，
@@ -675,10 +742,25 @@ when isMainModule:
     else:
       gMouseInside = false  # 拖动时不跟随
 
-    # ---- 宠物颜色：提问(橙,文件) > 回复完成(绿,文件) > 基态(蓝) ----
-    # v2.2：无主窗口概念 → 基态恒蓝(0)，黑(1)不再使用；绿色停闪由浏览器
-    # 页面聚焦通知 3081（server 把 pet-state 转 blue），本壳只跟随文件颜色。
+    # ---- dsh 窗口状态：即时跟随基态色（v2.2.1 主需求，同旧独立窗口感知）----
+    # 命中窗口后 50ms 单窗口快查（IsWindow/IsIconic 廉价调用，零枚举 → 即时变色，
+    # 等效旧版每帧跟随）；窗口未命中(未开/被关)时 1s 低频 EnumWindows 重新找。
     let petTick = GetTickCount64()
+    if gDshHwnd == 0:
+      if petTick - gDshWinTick >= 1000:
+        gDshWinTick = petTick
+        gDshHwnd = findDshWindow()
+        gDshMinimized = if gDshHwnd != 0: IsIconic(gDshHwnd) == 1 else: true
+    else:
+      if petTick - gDshWinTick >= 50:
+        gDshWinTick = petTick
+        if IsWindow(gDshHwnd) == 0:
+          gDshHwnd = 0          # PWA 窗口被关 → 回未命中分支（收起态 + 1s 后重找）
+          gDshMinimized = true
+        else:
+          gDshMinimized = IsIconic(gDshHwnd) == 1
+    # ---- 宠物颜色：提问(橙,文件) > 回复完成(绿,文件) > 基态(窗口可见=蓝/收起=黑) ----
+    # 绿色停闪由浏览器页面聚焦通知 3081（server 把 pet-state 转 blue），本壳只跟随文件。
     let pollGap = if gPetPollOk: 1000 else: 5000   # 失败拉长间隔，少打扰主循环
     if petTick - gPetPollTick > pollGap:
       gPetPollTick = petTick
@@ -686,19 +768,21 @@ when isMainModule:
       gPetPollOk = c >= 0
       gAsking = c == 2
       gDoneReply = c == 3
-    gPetBaseColor = 0   # 基态恒蓝（2026-09-06 v2.2：无窗口最小化概念）
+    gPetBaseColor = if gDshMinimized: 1 else: 0   # 黑(收起) / 蓝(可见)
     var target = 0
     if gAsking:
       target = 2
     elif gDoneReply:
       target = 3
+    elif gDshMinimized:
+      target = 1
     else:
       target = 0
     if target != gPetColor:
       gPetColor = target
       gPetBlinkOn = true
       floatPaint(gFloatHwnd)
-      applyPetIconColor()   # 托盘图标跟随宠物色（蓝/橙/绿）
+      applyPetIconColor()   # 托盘图标跟随宠物色（蓝/黑/橙/绿）
       dbg("pet color -> " & $target)
     # 提问(橙)心跳闪烁；回复完成(绿)常亮不闪（2026-08-27 主需求：绿不闪）
     if gPetColor == 2 and petTick - gPetBlinkTick >= 400:

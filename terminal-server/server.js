@@ -307,10 +307,29 @@ function runAskDetection() {
     if (askPending) { askPending = false; runAskDetection(); }
   });
 }
-try {
-  // 事件驱动：会话写入（含 approval/asked|decided）→ 立即检测（限流）
-  fs.watch(path.join(os.homedir(), '.dsh/sessions'), { recursive: true }, () => runAskDetection());
-} catch (e) { /* watch 失败则仅启动检测 */ }
+// 会话变更检测（2026-09-06 修复）：fs.watch recursive 在 Linux(WSL) 不被支持
+// （只监控顶层目录），深层 session 文件写入不触发 → 绿闪检测只剩重启时一次。
+// 改为轻量 mtime 轮询（2s stat 最新会话文件，mtime 变化才跑检测，静默期零开销）。
+let lastSessMtime = 0;
+function latestSessionMtime() {
+  try {
+    const root = path.join(os.homedir(), '.dsh', 'sessions');
+    let best = 0;
+    for (const scope of fs.readdirSync(root)) {
+      const sp = path.join(root, scope);
+      if (!fs.statSync(sp).isDirectory()) continue;
+      for (const sid of fs.readdirSync(sp)) {
+        const f = path.join(sp, sid, 'session.jsonl.zstd');
+        try { const mt = fs.statSync(f).mtimeMs; if (mt > best) best = mt; } catch (e) {}
+      }
+    }
+    return best;
+  } catch (e) { return 0; }
+}
+setInterval(() => {
+  const mt = latestSessionMtime();
+  if (mt !== lastSessMtime) { lastSessMtime = mt; runAskDetection(); }
+}, 2000);
 runAskDetection();                                    // 启动立即检测一次（同步文件）
 
 // ---------- 今日词元统计（聚合 dsh 会话记录，前端事件流不可靠，改后端算） ----------

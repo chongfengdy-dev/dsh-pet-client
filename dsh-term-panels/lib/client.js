@@ -32,6 +32,12 @@ window.__ModuleLoader__.load({
 			if (document.visibilityState === "visible") notifyPetAck();
 		});
 		window.addEventListener("focus", notifyPetAck);
+		// v2.2 PWA 窗口锚点：dsh 页面 title 随会话标题变化，Nim 壳无法靠固定标题
+		// 找到 PWA/标签窗口做"呼出/最小化"切换 → 这里把页面标题固定为
+		// "DeepSeek Harness"（旧 WebView 版同款做法），浏览器/PWA 窗口标题稳定可寻。
+		setInterval(() => {
+			if (document.title !== "DeepSeek Harness") document.title = "DeepSeek Harness";
+		}, 1500);
 		const DOCK_ID = "dsh-panels-dock";
 		const TERM_PANEL_ID = "dsh-term-panel";
 		const TERM_HOST_ID = "dsh-term-host";
