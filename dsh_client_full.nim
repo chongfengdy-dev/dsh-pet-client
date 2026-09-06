@@ -20,6 +20,7 @@ proc dbg(msg: string) =
 
 const
   WebUrl = "http://127.0.0.1:3080"
+  WebTokenFile = "dsh-web-token.txt"   # 认证引导 token 文件（exe 同目录；PWA/标签首次打开带 token 种 cookie）
   AppId = "dsh_nim_client"
   FLOAT_ANIM_MS = 16        # 悬浮动画帧间隔（60fps 定稿；主实测 60fps 开宠物稳定——降频无关，
                             # 稳定关键是无窗口挂钩，见主循环注释）
@@ -30,6 +31,28 @@ const
   ID_TRAY_CLEAN = 3         # 切换：纯净模式（复制指令）
   ID_TRAY_PET = 4           # 显示/隐藏宠物开关
   ID_TRAY_EXIT = 5
+
+# ---- dsh web 认证引导（2026-09-05：dsh 0.1.2-rc.1 起 web 需浏览器认证）----
+# 浏览器/WebView 首次必须带 token 访问一次：服务端校验通过后种下持久 cookie
+# （默认 30 天），此后普通访问免认证。主浏览器已各自完成认证；本壳只负责
+# 拉起默认浏览器时带上 token（幂等：cookie 已有效时等于续期）。
+# 用法：把 dsh web 启动时打印的完整 URL（含 ?token=，或只存 token 本身）
+# 写入 exe 同目录 dsh-web-token.txt 后启动客户端。
+proc launchToken(): string =
+  let p = getAppDir() & "\\" & WebTokenFile
+  try:
+    if fileExists(p):
+      let raw = strip(readFile(p))
+      if raw.len > 0:
+        let i = raw.find("?token=")
+        result = if i >= 0: raw[(i + 7)..^1] else: raw
+  except CatchableError:
+    discard
+
+proc bootUrl(): string =
+  ## 认证引导 URL：token 文件有效时带 token，否则回落干净 WebUrl
+  let t = launchToken()
+  if t.len > 0: WebUrl & "?token=" & t else: WebUrl
 
 var
   gTrayData: NOTIFYICONDATAW
@@ -88,12 +111,11 @@ proc toWs(s: string): wstring =
   result = wstring(buf)
 
 proc openInBrowser() =
-  ## v2.2 主入口：用系统默认浏览器打开 dsh web（干净 URL，不带 token）。
-  ## 认证靠浏览器 30 天持久 cookie（签名密钥固定、web 重启/模式切换不失效）；
-  ## 不带 token——token 每次 web 重启变化，带旧 token 在无 cookie 的新窗口会触发
-  ## 401（WebView 时代需每次 token 交换，浏览器 cookie 长效后已不需要，2026-09-06）
-  dbg("open browser: " & WebUrl)
-  let wurl = toW(WebUrl)
+  ## v2.2 主入口：用系统默认浏览器打开 dsh web（127.0.0.1:3080）。
+  ## 浏览器自身完成认证（cookie 已种则直接进）；带 token URL 幂等。
+  let url = bootUrl()
+  dbg("open browser: " & url)
+  let wurl = toW(url)
   if wurl != nil:
     discard ShellExecuteW(0, nil, wurl, nil, nil, SW_SHOW)
 
@@ -164,11 +186,12 @@ proc findDshWndProc(hwnd: HWND, lParam: LPARAM): WINBOOL {.stdcall.} =
   # 命中 dsh 对话窗口，避免每点一次找不到窗口重复开新 PWA 窗口
   var title: array[256, WCHAR]
   let tn = GetWindowTextW(hwnd, cast[LPWSTR](title.addr), 256)
-  if tn >= 8:
-    const marker = "deepseek"          # 8 字符全小写
-    for i in 0 .. tn - 8:
+  if tn >= 7:
+    const marker = "harness"           # 7 字符全小写；只匹配 dsh 页面(含 Harness)，
+                                       # DeepSeek 官网等非 dsh 页面(仅 DeepSeek)不会误命中
+    for i in 0 .. tn - 7:
       var m = true
-      for j in 0 ..< 8:
+      for j in 0 ..< 7:
         var ch = int(title[i + j])
         if ch > 127: m = false; break   # 非 ASCII 字符直接失败（防中文低位误匹配）
         if ch >= 65 and ch <= 90: ch += 32   # A-Z → a-z
