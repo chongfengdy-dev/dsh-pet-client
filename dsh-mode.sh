@@ -11,7 +11,12 @@
 # 反复重试、token 多次变化导致客户端跟不上(401)。
 set -euo pipefail
 
-MARK="$HOME/.dsh/.dsh-web-mode"
+# 真实用户目录动态获取：脚本可能被 sudo bash 调用（sudo 会把 $HOME 重置为 /root），
+# 而 dsh-web.service 以 User=dream 运行，标记必须写在服务实际读取的 $HOME 下。
+REAL_USER="${SUDO_USER:-$(id -un)}"
+REAL_HOME="$(getent passwd "$REAL_USER" | cut -d: -f6)"
+
+MARK="$REAL_HOME/.dsh/.dsh-web-mode"
 SERVICE="dsh-web"
 PORT=3080
 
