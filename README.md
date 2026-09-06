@@ -137,10 +137,10 @@ dsh web 每次启动生成一次性 token；WSL 侧挂载 `dsh-web-token-sync` �
 ## 版本历史
 
 | 版本 | 内容 |
+|---|---|
 | v2.1.6（当前）| 纯净 dsh 模式（托盘「打开 DSH（纯净模式）」一键切换，--patch 剥离第三方插件仅保留官方 base+web-app + token-sync；网页/客户端原版样、鲸鱼仍在、第三方元素全无；插件崩时不用备份/恢复 ~/.dsh）+ 托盘两入口改名（完整版/纯净模式）点击复制切换指令到剪贴板 + 401 根治（waitTokenStable 轮询等服务端新 token 稳定再导航；dsh-mode.sh 改 stop→等端口释放→start 避免多重启）+ HUD 字号 13px + dsh-term-panels 持久化修复（_serverSettingsCache 缓存/设置面板 UI 同步/页面缩放外接）+ dsh-web-token-sync 补 dsh.bundle 声明 + dsh-message-outline 弃用删除 |
 | v2.1.5 | 适配 dsh 0.1.2-rc.1：① web 强制认证（客户端 token 自动引导 + dsh-web-token-sync 插件自动同步 + 托盘「浏览器打开原版」后备入口）；② 左缘大纲改官方同源 turnOutline 投影数据（新架构兼容，全量显示；官方历史分页缺陷待修）；③ 终端入口收进 Token HUD 底部按钮；④ HUD 180px/数据对齐/金额一位小数/字体跟随设置；⑤ 界面字号字体存服务端（跨重启记忆、浏览器/客户端共享）；⑥ 终端字体库扩充（霞鹜文楷等宽/Fira Code）并独立于界面字体 |
 | v2.1.4 | L 手势最小化（右键下→右 ±30°，事件驱动零延迟）；回复完成绿色常亮（不闪）；已归档会话面板（打开/恢复/删除）；界面字体设置（系统字库选择 + 字号下拉）；消息大纲随侧边栏宽度实时定位；exe 蓝色鲸鱼图标；微信 bot 修复（dsh 0.1.1-rc.2 会话持久化冲突导致不回消息） |
-|---|---|
 | v2.1.3 | 回复完成绿闪提示（提问后 dsh 干完活，悬浮鲸鱼/托盘/任务栏图标绿↔基态闪烁，主窗口置前即停）；基态色交换（打开=蓝、最小化=黑）；重启 dsh-web 后内嵌页面自动刷新（后端恢复检测 → navigate）；dsh-web.service 加 --no-open（不再自动弹系统浏览器）；Hub 平台 token 自动获取（从浏览器本地存储读取，token 失效自动恢复，无需手动 F12） |
 | v2.1.2 | Bug 修复：①dsh 一键更新后仍显示旧版本（根因=server.js 用 require() 读 package.json 触发 Node 模块缓存，dsh-terminal 进程永远读到首次加载版本）→ 改 readLocalDshVersion() 用 fs.readFileSync+JSON.parse；②余额一直不显示（根因=.credentials.yaml 的 DEEPSEEK_API_KEY 在 refs: 嵌套下带缩进，正则 ^ 匹配不上）→ 改 ^\s*；余额刷新频率 2 分钟→30s（HUB 词元保持 10s 拉取/60s 聚合不变）；手动 sudo 重启 dsh-web 后前端轮询 /api/dsh-version 至 hasUpdate=false 且 3080 可访问时自动刷新页面（6 分钟超时） |
 | v2.1.1 | Token HUD 增强：余额<5 元红色警示、「花费」行高峰/空闲状态（DeepSeek 峰谷定价官方规则 9:00-12:00/14:00-18:00，UTC+8）；dsh 版本更新提示（右下角一键更新，自动升级 npm 包 + 打开终端预输入 sudo 重启）；终端面板毛玻璃对齐 Token HUD；消息大纲拆分为独立 npm 插件 dsh-message-outline（v0.1.1 已上架） |
