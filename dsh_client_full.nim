@@ -31,6 +31,8 @@ const
   ID_TRAY_CLEAN = 3         # 切换：纯净模式（复制指令）
   ID_TRAY_PET = 4           # 显示/隐藏宠物开关
   ID_TRAY_EXIT = 5
+  SingleMutexName = "DSH-Nim-Client-SingleInstance"   # 单实例互斥（重复点击 exe 不叠开）
+  ActivateEventName = "DSH-Nim-Client-ActivateEvent"  # 新实例通知老实例"呼出主窗口"的事件
 
 # ---- dsh web 认证引导（2026-09-05：dsh 0.1.2-rc.1 起 web 需浏览器认证）----
 # 浏览器/WebView 首次必须带 token 访问一次：服务端校验通过后种下持久 cookie
@@ -178,6 +180,8 @@ proc showTrayMenu(hwnd: HWND) =
 # 标签的窗口标题都稳定为该值），本壳据此枚举找 dsh 对话窗口做切换。
 var gFoundDshHwnd: HWND
 var gDshLaunchTick: int64 = 0  # 最近一次拉起 PWA 的时刻（防 2s 内重复点击重复开窗）
+var gSingleMutex: HANDLE = 0  # 单实例互斥句柄（运行期保持，退出时释放）
+var gActivateEvent: HANDLE = 0 # 激活事件句柄（新实例 SetEvent 触发本实例呼出）
 
 proc findDshWndProc(hwnd: HWND, lParam: LPARAM): WINBOOL {.stdcall.} =
   # 大小写不敏感匹配品牌词 "deepseek"（主实测纯净模式官方页面标题形如
@@ -740,6 +744,20 @@ when isMainModule:
   discard timeBeginPeriod(1)
   dbg("main start")
   discard SetProcessDPIAware()
+
+  # ---- 单实例：已有实例在跑 → 通知它"呼出主窗口(PWA)"并退出本实例 ----
+  # 重复双击 exe / 开机自启重叠都不会叠开多个宠物（2026-09-06 主需求）
+  gSingleMutex = CreateMutexW(nil, FALSE, newWideCString(SingleMutexName))
+  if GetLastError() == ERROR_ALREADY_EXISTS:
+    let hEv = CreateEventW(nil, FALSE, FALSE, newWideCString(ActivateEventName))
+    if hEv != 0:
+      discard SetEvent(hEv)      # 触发已有实例呼出主窗口
+      discard CloseHandle(hEv)
+    dbg("single instance exists -> activate & exit")
+    quit(0)
+  # 本实例为唯一实例：创建激活事件（auto-reset），主循环轮询接收"呼出"请求
+  gActivateEvent = CreateEventW(nil, FALSE, FALSE, newWideCString(ActivateEventName))
+
   setupAutostart()
   dbg("autostart ok")
 
@@ -766,6 +784,11 @@ when isMainModule:
     while PeekMessageW(msg.addr, 0, 0, 0, PM_REMOVE):
       discard TranslateMessage(msg.addr)
       discard DispatchMessageW(msg.addr)
+
+    # 单实例激活：重复点击 exe（新实例已退出）→ 本实例呼出 PWA 主窗口
+    if gActivateEvent != 0 and WaitForSingleObject(gActivateEvent, 0) == WAIT_OBJECT_0:
+      dbg("single-instance activate -> toggle dsh app")
+      toggleDshApp()
 
     # 鼠标交互：鲸鱼游向鼠标（GetCursorPos 轮询，透明穿透区也感知）
     if not gFloatDragging:
