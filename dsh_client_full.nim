@@ -372,7 +372,9 @@ var
   gPetPollTick: int64 = 0   # 宠物状态轮询计时（自适应间隔）
   gPetPollOk = false        # 上次轮询是否成功（成功 1s / 失败 5s 间隔）
   gAsking = false           # 是否正在提问/要授权（橙色心跳，来自状态文件）
-  gDoneReply = false        # 回复是否完成（绿色常亮，来自状态文件；停闪由 3081 转蓝驱动）
+  gDoneReply = false        # 回复是否完成（绿色常亮；停靠=exe 检测 PWA 窗口置前写 ack，旧版同语义）
+  gPetDoneAt: int64 = 0     # 最近一次 green 的 doneAt（时间戳，写 ack 用）
+  gPetDoneAcked = false     # 本次 green 是否已 ack（PWA 窗口置前=主已看到回复 → 不再绿）
   gDibBits: ptr UncheckedArray[uint32]   # DIB 像素（96x96 BGRA 预乘）
   gMemDC: HDC
 
@@ -700,16 +702,34 @@ proc fetchPetState(): int =
   ## 0xc0000005 访问冲突导致进程崩溃；改为读本地文件（纯文件 I/O，零网络）。
   ## 路径动态化（2026-08-16 主定稿）：%USERPROFILE%\\pet-state.json——
   ## 服务端写 Windows 用户目录根，不再硬编码用户名，换机可部署。
-  ## v2.2：green 停闪由浏览器页面聚焦通知 3081（server 转 blue），本壳只跟随文件。
+  ## v2.2：绿色停靠 = 本壳检测 PWA 窗口被置前(主看到)后写 pet-ack.json（server 转 blue），
+  ## 与旧版"主窗口置前即停"同语义，纯净/完整模式都不依赖页面 JS。
   try:
     let body = readFile(getEnv("USERPROFILE") & "\\pet-state.json")
     if body.contains("\"pet\":\"blue\""): return 0
     if body.contains("\"pet\":\"black\""): return 1
     if body.contains("\"pet\":\"orange\""): return 2
-    if body.contains("\"pet\":\"green\""): return 3
+    if body.contains("\"pet\":\"green\""):
+      let m = body.find("\"doneAt\":")
+      if m >= 0:
+        var i = m + 9
+        while i < body.len and body[i] in {'0'..'9'}: i.inc
+        try: gPetDoneAt = parseInt(body[m+9 ..< i])
+        except CatchableError: discard
+      return 3
     return -1
   except CatchableError:
     return -1
+
+proc writePetAck() =
+  ## PWA 对话窗口被置前(=主已看到回复) → 写回执文件 pet-ack.json（server 见
+  ## ack.doneAt >= green.doneAt 转 blue）。2026-09-06 v2.2 恢复（旧版同机制；
+  ## 不用 HTTP——Nim 主循环禁网络调用，Windows 下 net 模块会 0xc0000005）
+  try:
+    writeFile(getEnv("USERPROFILE") & "\\pet-ack.json",
+              "{\"doneAt\":" & $gPetDoneAt & "}")
+  except CatchableError:
+    discard
 
 # ---------- 主流程 ----------
 
@@ -779,14 +799,27 @@ when isMainModule:
         else:
           gDshMinimized = IsIconic(gDshHwnd) == 1
     # ---- 宠物颜色：提问(橙,文件) > 回复完成(绿,文件) > 基态(窗口可见=蓝/收起=黑) ----
-    # 绿色停闪由浏览器页面聚焦通知 3081（server 把 pet-state 转 blue），本壳只跟随文件。
     let pollGap = if gPetPollOk: 1000 else: 5000   # 失败拉长间隔，少打扰主循环
     if petTick - gPetPollTick > pollGap:
       gPetPollTick = petTick
+      let prevDoneAt = gPetDoneAt
       let c = fetchPetState()
       gPetPollOk = c >= 0
       gAsking = c == 2
       gDoneReply = c == 3
+      if c == 3 and gPetDoneAt != prevDoneAt:
+        gPetDoneAcked = false     # 新一轮回复完成 → 重新需要提示
+      if c != 3:
+        gPetDoneAcked = false
+    # 绿色保持（旧版同语义）：PWA 对话窗口被置前(GetForegroundWindow==命中窗口、
+    # 非最小化) = 主已看到回复 → 写 ack → server 转 blue 停绿。
+    # 主点鲸鱼呼出窗口后窗口变前台即触发；点成最小化则窗口非前台保持绿(提示仍在)。
+    if gDoneReply and not gPetDoneAcked and gDshHwnd != 0 and
+       GetForegroundWindow() == gDshHwnd and IsIconic(gDshHwnd) == 0:
+      gPetDoneAcked = true
+      writePetAck()
+      gDoneReply = false
+      dbg("pet green acked (PWA foreground)")
     gPetBaseColor = if gDshMinimized: 1 else: 0   # 黑(收起) / 蓝(可见)
     var target = 0
     if gAsking:
