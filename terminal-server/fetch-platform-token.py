@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 自动获取 DeepSeek 开放平台 userToken（2026-08-25 主需求：不想每次 F12 手动找）
+# 自动获取 DeepSeek 开放平台 userToken（2026-08-25 用户需求：不想每次 F12 手动找）
 # 原理：Chromium 系浏览器（Chrome/Edge/CentBrowser/Brave/Vivaldi 等）的 localStorage
 # 存于各自 User Data 的 LevelDB（明文），platform.deepseek.com 的 userToken 在其中。
 # 自动遍历本机常见浏览器目录，取第一个包含目标数据的（即用户实际登录的浏览器）。
@@ -25,7 +25,7 @@ BROWSERS = ['Chrome', 'Edge', 'CentBrowser', 'BraveSoftware/Brave-Browser',
 
 def _candidate_dirs():
     """枚举 /mnt/c/Users 下真实用户目录 × 常见浏览器 → localStorage 候选路径。
-    不硬编码用户名（2026-08-25 主要求：发布代码不含个人电脑名）。"""
+    不硬编码用户名（2026-08-25 用户要求：发布代码不含个人电脑名）。"""
     users_root = '/mnt/c/Users'
     users = []
     try:
@@ -42,7 +42,7 @@ def _candidate_dirs():
 
 def _candidate_dirs():
     """枚举 /mnt/c/Users 下真实用户目录 × 常见浏览器 → localStorage 候选路径。
-    不硬编码用户名（2026-08-25 主要求：发布代码不含个人电脑名）。"""
+    不硬编码用户名（2026-08-25 用户要求：发布代码不含个人电脑名）。"""
     users_root = '/mnt/c/Users'
     users = []
     try:

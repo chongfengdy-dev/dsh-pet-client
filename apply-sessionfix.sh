@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # apply-sessionfix: 放宽 dsh v0→v1 迁移器对 plugin source `summary` 的校验。
 #
-# 背景（2026-09-10 主定）：
+# 背景（2026-09-10 定）：
 #   v0 时代插件（如 dsh-mnemon）在 user/message 的 plugin source 里用
 #   form=instructions / form=recall 同时带 summary；dsh 0.1.5-rc.1 的迁移器
 #   规定 summary 只能配 form=notice，否则整会话被拒绝观察
@@ -40,7 +40,7 @@ s = open(p, encoding='utf-8').read()
 old = ('\tif (form === "notice") stringValue(source["summary"], `${label} summary`);\n'
        '\telse if (source["summary"] !== void 0) throw new SessionFormatError(`${label} summary requires notice form`);')
 assert old in s, '未找到目标代码（dsh 版本可能已变，请人工检查迁移器实现）'
-new = ('\t// 2026-09-10 补丁（主定）：v0 时代插件（如 dsh-mnemon）在 form=instructions/recall 上带\n'
+new = ('\t// 2026-09-10 补丁（定）：v0 时代插件（如 dsh-mnemon）在 form=instructions/recall 上带\n'
        '\t// summary，旧迁移器一律拒绝导致整个会话打不开（本机 231 个旧会话 + 归档会话）。\n'
        '\t// 放宽为：summary 只校验必须是字符串（v1 及后续格式不再校验这两者关系）。\n'
        '\tif (source["summary"] !== void 0) stringValue(source["summary"], `${label} summary`);')

@@ -17,7 +17,7 @@ export const name = "dsh-wechat";
 export const inject = ["agentDefaultModel", "agents", "sessions"];
 
 const Config = z.object({
-	peer: z.string().required(),          // 主微信账号 id（o9cq...@im.wechat）
+	peer: z.string().required(),          // 微信账号 id（o9cq...@im.wechat）
 	uin: z.string().required(),           // X-Wechat-Uin（base64）
 	bot_id: z.string().required(),        // e69019ad4f22@im.bot
 	device_id: z.string().required(),     // 060000...

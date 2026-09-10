@@ -1,6 +1,6 @@
 // dsh-archive-sync：让「已归档会话恢复」免重启即时生效。
 //
-// 背景（2026-09-10 主需求）：
+// 背景（2026-09-10 用户需求）：
 //   dsh 把归档集合 archivedSessionIds 读进内存（workspaceRegistry.requireState()），
 //   而官方设计上归档是单向的 —— dsh-workspace/README 原文 "Archiving is one-way …
 //   no unarchive action exists yet"，服务端只有 archiveSession、没有移除方法。

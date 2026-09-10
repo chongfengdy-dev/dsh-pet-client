@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# pack-share.sh — 打包 DSH-Pet-Client 发布 zip（安全优先，2026-09-10 主定）
+# pack-share.sh — 打包 DSH-Pet-Client 发布 zip（安全优先，2026-09-10 定）
 #
 # 设计原则（此前踩过的坑都在这）：
 #   1. 清单以 `git ls-files` 为准 → .gitignore 里的私有/敏感文件天然排除：

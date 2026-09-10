@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-# 检测会话状态（主定稿 2026-08-16 橙闪；2026-08-21 新增回复完成绿闪）：
+# 检测会话状态（定稿 2026-08-16 橙闪；2026-08-21 新增回复完成绿闪）：
 # 1. ask_user_question 提问未决（tool/call 精确匹配 name + callId 配对 + answered 集合防重试）
 # 2. approval/asked 审批/授权请求未决（asked > decided，最近 10 分钟内）
-# 3. 回复完成（2026-08-21 主需求：提问后 dsh 干完活绿闪提示）——
+# 3. 回复完成（2026-08-21 用户需求：提问后 dsh 干完活绿闪提示）——
 #    turn 配对：最后一个 turn/end(completed) 的 turn 内存在 user/message（用户提问触发的轮次）
 #    → done=true, doneAt=turn/end 时间戳。自动任务（无 user/message）不误报。
 # 时间窗：只认最近 10 分钟内的未决（历史遗留不提醒）

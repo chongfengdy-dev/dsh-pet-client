@@ -21,7 +21,7 @@ window.__ModuleLoader__.load({
 		const XTERM_JS = "http://127.0.0.1:3081/vendor/xterm/xterm.js";
 		const XTERM_FIT_JS = "http://127.0.0.1:3081/vendor/fit/addon-fit.js";
 		const BALANCE_URL = "http://127.0.0.1:3081/api/balance";
-		// v2.2 浏览器化：页面聚焦/可见 = 主已看到回复 → 通知 3081 停绿闪回执
+		// v2.2 浏览器化：页面聚焦/可见 = 用户已看到回复 → 通知 3081 停绿闪回执
 		// （原 Nim WebView 版靠"窗口置前写 pet-ack.json"，浏览器方案由页面自己上报）
 		const PET_ACK_URL = "http://127.0.0.1:3081/api/pet-ack";
 		function notifyPetAck() {
@@ -38,7 +38,7 @@ window.__ModuleLoader__.load({
 		setInterval(() => {
 			if (document.title !== "DeepSeek Harness") document.title = "DeepSeek Harness";
 		}, 1500);
-		// v2.2 PWA 安装引导（主需求）：浏览器强制 PWA 安装须用户一次确认——
+		// v2.2 PWA 安装引导（用户需求）：浏览器强制 PWA 安装须用户一次确认——
 		// 捕获 beforeinstallprompt（页面可安装）且在普通标签（非应用窗口）时，
 		// 右下角浮层提示"安装 DSH 桌面应用"，点安装走系统安装（之后点鲸鱼直接拉 PWA 窗口）。
 		// 每会话最多提示一次（sessionStorage 去重），已装(appinstalled/standalone)不提示。
@@ -115,11 +115,11 @@ window.__ModuleLoader__.load({
 			{ name: "Courier New", value: '"Courier New", monospace' },
 			{ name: "宋体", value: "SimSun, monospace" },
 			{ name: "微软雅黑", value: '"Microsoft YaHei", monospace' },
-			// 2026-09-05 主定：普通霞鹜文楷不保留（终端用等宽更合适），只留等宽版
-			{ name: "霞鹜文楷等宽", value: '"LXGW WenKai Mono", "霞鹜文楷等宽", monospace' },   // 2026-09-05 主加项
-			{ name: "Fira Code", value: '"Fira Code", Consolas, monospace' },   // 2026-09-05 主定（Ubuntu Mono 换 Fira Code）
+			// 2026-09-05 定：普通霞鹜文楷不保留（终端用等宽更合适），只留等宽版
+			{ name: "霞鹜文楷等宽", value: '"LXGW WenKai Mono", "霞鹜文楷等宽", monospace' },   // 2026-09-05 新增项
+			{ name: "Fira Code", value: '"Fira Code", Consolas, monospace' },   // 2026-09-05 定（Ubuntu Mono 换 Fira Code）
 		];
-		// 界面字体选项（覆盖 dsh 的 --dsw-font-family；2026-08-27 主需求：字型选择）
+		// 界面字体选项（覆盖 dsh 的 --dsw-font-family；2026-08-27 用户需求：字型选择）
 		const UI_FONT_OPTIONS = [
 			{ name: "系统默认", value: "" },
 			{ name: "微软雅黑", value: '"Microsoft YaHei", "微软雅黑", sans-serif' },
@@ -166,7 +166,7 @@ window.__ModuleLoader__.load({
 
 			// ---------- 终端面板（内嵌 xterm，直连 3081；可拖拽 + 可调大小，记忆几何） ----------
 			const termPanel = panel(TERM_PANEL_ID, ">_ 终端");
-			// 默认几何（主 2026-08-16 定稿：937x495 @ (201,110)）
+			// 默认几何（2026-08-16 定稿：937x495 @ (201,110)）
 			const savedGeom = loadPanelGeom() || { x: 201, y: 110, w: 937, h: 495 };
 			if (savedGeom) {
 				termPanel.root.style.width = savedGeom.w + "px";
@@ -208,7 +208,7 @@ window.__ModuleLoader__.load({
 					termSettingsPanel.style.display === "none" ? "block" : "none";
 			});
 			termPanel.root.appendChild(settingsBtn);
-			// ---------- 界面字体（系统字库枚举 + 选择即应用；2026-08-27 主需求：放入设置面板）
+			// ---------- 界面字体（系统字库枚举 + 选择即应用；2026-08-27 用户需求：放入设置面板）
 			// 2026-09-05 并入 termSettings（服务端持久化，客户端重启可记住） ----------
 			let uiFont = termSettings.uiFont || "";
 			let sysFonts = null;   // 系统字体列表（懒加载缓存）
@@ -243,7 +243,7 @@ window.__ModuleLoader__.load({
 				applyUiFont(uiFont);
 				applyTermSettings();   // 2026-09-05 持久化到服务端 + 已开 xterm 同步字体
 			}
-			// ---------- 设置页"界面字体" section（React 正规注册，同 dshmarket 方案；2026-08-27 主需求） ----------
+			// ---------- 设置页"界面字体" section（React 正规注册，同 dshmarket 方案；2026-08-27 用户需求） ----------
 			function buildSettingsFontEntry() {
 				if (!React || !ctx.slots) return;
 				try {
@@ -506,7 +506,7 @@ window.__ModuleLoader__.load({
 					bgImgLayer = null;
 				}
 			};
-			// 2026-09-05 主更正：终端（xterm 内容）保持自己的字体设置（⚙ 面板 fontIdx 选择），不随界面字体
+			// 2026-09-05 更正：终端（xterm 内容）保持自己的字体设置（⚙ 面板 fontIdx 选择），不随界面字体
 			// 应用设置：termHost 背景 = 自定义色×透明度 + 图片层（可选，xterm 背景透明）
 			const applyTermSettings = (opts) => {
 				saveTermSettings(termSettings, opts);
@@ -599,7 +599,7 @@ window.__ModuleLoader__.load({
 			const hud = buildHud();
 			document.body.appendChild(hud.root);
 
-			// ---------- HUD 底部：终端快捷按钮行（2026-09-05 主指示：独立悬浮钮
+			// ---------- HUD 底部：终端快捷按钮行（2026-09-05 用户指示：独立悬浮钮
 			//      与官方悬浮 UI 反复撞位 → 收进 HUD 下开一行，点击弹出/收起终端） ----------
 			const termBtnRow = document.createElement("div");
 			Object.assign(termBtnRow.style, {
@@ -668,7 +668,7 @@ window.__ModuleLoader__.load({
 			handleHash();
 
 			// ---------- HUD 数据：词元（平台用量接口，回落会话聚合）+ 余额 ----------
-			// 2026-08-17 主定稿：六项=输入(命中)/输入(未命中)/命中率/输出/今日消耗/余额。
+			// 2026-08-17 定稿：六项=输入(命中)/输入(未命中)/命中率/输出/今日消耗/余额。
 			// 优先 3081 /api/platform-usage（DeepSeek 平台官方每日用量，含金额），
 			// 失败（无平台 token/接口异常）回落 /api/today-usage（本地会话日志，无金额）。
 			// 余额走官方 API /api/balance。
@@ -677,7 +677,7 @@ window.__ModuleLoader__.load({
 			fetchUsage(hud, hudState);
 			setInterval(() => fetchUsage(hud, hudState), 10000);
 			refreshBalance(hud, hudState);
-			setInterval(() => refreshBalance(hud, hudState), 30000); // 余额 30s 刷新（2026-08-21 主定）
+			setInterval(() => refreshBalance(hud, hudState), 30000); // 余额 30s 刷新（2026-08-21 定）
 
 			// ---------- 左缘消息大纲条（当前会话我的消息，hover 展开） ----------
 			buildMessageOutline(ctx);
@@ -718,7 +718,7 @@ window.__ModuleLoader__.load({
 				width: "640px", height: "420px",
 				minWidth: "320px", minHeight: "200px",
 				right: "72px", top: "50%", transform: "translateY(-50%)",
-				// 容器半透明毛玻璃（30% 主题色 + blur，与 Token HUD 同款；主 2026-08-19 要求）
+				// 容器半透明毛玻璃（30% 主题色 + blur，与 Token HUD 同款；2026-08-19 要求）
 				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
 				backdropFilter: "blur(4px)",
 				border: "1px solid var(--dsw-alias-border-l2)",
@@ -734,7 +734,7 @@ window.__ModuleLoader__.load({
 			Object.assign(titleBar.style, {
 				display: "flex", alignItems: "center", gap: "8px",
 				padding: "8px 12px",
-				// 标题栏加深（65%）与内容区区分（主定稿 2026-08-16）
+				// 标题栏加深（65%）与内容区区分（定稿 2026-08-16）
 				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 65%, transparent)",
 				borderBottom: "1px solid var(--dsw-alias-border-l2)",
 				cursor: "move", userSelect: "none", flex: "none",
@@ -804,7 +804,7 @@ window.__ModuleLoader__.load({
 		function loadTermSettings() {
 			// 服务端权威恢复缓存优先（fetch 恢复后设置；WebView2 localStorage 重启不可靠）
 			if (_serverSettingsCache) return { ..._serverSettingsCache };
-			// 默认设置（主 2026-08-16 定稿：深色 #0d1117、透明度 60%、字号 16、Consolas）
+			// 默认设置（2026-08-16 定稿：深色 #0d1117、透明度 60%、字号 16、Consolas）
 			// 2026-09-05 界面字体/字号并入本对象（与服务端持久化同通道，WebView2 localStorage 不可靠）
 			// 页面缩放由浏览器/WebView 原生记忆，不在本对象持久化（已删 pageZoom）
 			let s = { bg: "#0d1117", alpha: 60, fontSize: 16, fontIdx: 0, bgImage: "", bgImageAlpha: 100, uiFont: "" };
@@ -1020,14 +1020,14 @@ window.__ModuleLoader__.load({
 			});
 		}
 
-		// 大纲锁定计数：菜单/设置面板打开时禁止消息大纲 hover 展开，并整体隐藏横杠（2026-08-27 主需求）
+		// 大纲锁定计数：菜单/设置面板打开时禁止消息大纲 hover 展开，并整体隐藏横杠（2026-08-27 用户需求）
 		function outlineLock(on) {
 			window.__dshOutlineLock = (window.__dshOutlineLock || 0) + (on ? 1 : -1);
 			if (window.__dshOutlineLock < 0) window.__dshOutlineLock = 0;
 			document.body.classList.toggle("dsh-outline-locked", window.__dshOutlineLock > 0);
 		}
 
-		// ---------- 已归档会话面板（侧边栏设置按钮上方，2026-08-27 主需求） ----------
+		// ---------- 已归档会话面板（侧边栏设置按钮上方，2026-08-27 用户需求） ----------
 		// dsh 归档 = 会话加入 archivedSessionIds（从列表隐藏、无找回 UI 且无法删除）；
 		// 本面板订阅 workspaces.list（归档 id 集合）+ sessions.list（会话详情 byId），
 		// 在侧边栏 footArea 的 settingsArea 之前插入"已归档会话"区块：
@@ -1042,11 +1042,11 @@ window.__ModuleLoader__.load({
 			root.id = "dsh-archived-panel";
 			Object.assign(root.style, {
 				borderTop: "1px solid var(--dsw-alias-border-l2)",
-				borderBottom: "1px solid var(--dsw-alias-border-l2)",   // 下方也加分隔线，与"设置"区分（2026-08-27 主需求）
+				borderBottom: "1px solid var(--dsw-alias-border-l2)",   // 下方也加分隔线，与"设置"区分（2026-08-27 用户需求）
 				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-1) 55%, transparent)",
 				color: "var(--dsw-alias-label-primary)",
-				fontFamily: "var(--dsw-font-family)",   // 跟随全局字体设置（2026-08-27 主需求）
-				fontSize: "14px", userSelect: "none",   // 对齐"设置"条目字号（2026-08-27 主需求）
+				fontFamily: "var(--dsw-font-family)",   // 跟随全局字体设置（2026-08-27 用户需求）
+				fontSize: "14px", userSelect: "none",   // 对齐"设置"条目字号（2026-08-27 用户需求）
 			});
 			// 标题行（点击折叠/展开）
 			const head = document.createElement("div");
@@ -1056,7 +1056,7 @@ window.__ModuleLoader__.load({
 				color: "var(--dsw-alias-label-secondary)",
 				fontSize: "14px", fontWeight: "600",
 			});
-			// 标题行 hover：高亮背景 + 阴影（2026-09-01 主需求：已归档会话这一行滑过也要有阴影）
+			// 标题行 hover：高亮背景 + 阴影（2026-09-01 用户需求：已归档会话这一行滑过也要有阴影）
 			head.addEventListener("mouseenter", () => {
 				head.style.background = "var(--dsw-alias-interactive-bg-hover)";
 				head.style.boxShadow = "0 1px 3px rgba(0,0,0,.12)";
@@ -1087,7 +1087,7 @@ window.__ModuleLoader__.load({
 				display: "none",
 			});
 			let expanded = false;
-			// 本地已删除集合：删除成功后即时隐藏（不等 dsh host 文件监听推送，2026-08-27 主需求）
+			// 本地已删除集合：删除成功后即时隐藏（不等 dsh host 文件监听推送，2026-08-27 用户需求）
 			let removedIds = new Set();
 			head.addEventListener("click", () => {
 				expanded = !expanded;
@@ -1156,11 +1156,11 @@ window.__ModuleLoader__.load({
 					Object.assign(title.style, {
 						flex: "1", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
 					});
-					// 不设 title 属性：避免 hover 原生悬浮提示（2026-08-27 主需求）
+					// 不设 title 属性：避免 hover 原生悬浮提示（2026-08-27 用户需求）
 					const time = document.createElement("span");
 					time.textContent = relTime(row.updatedAt);
 					Object.assign(time.style, { fontSize: "12px", color: "var(--dsw-alias-label-tertiary)" });
-					// 三点按钮：hover 显示，点击弹出菜单（删除会话）；不设 title 避免悬浮提示（2026-08-27 主需求）
+					// 三点按钮：hover 显示，点击弹出菜单（删除会话）；不设 title 避免悬浮提示（2026-08-27 用户需求）
 					const moreBtn = document.createElement("button");
 					moreBtn.textContent = "⋯";
 					Object.assign(moreBtn.style, {
@@ -1212,7 +1212,7 @@ window.__ModuleLoader__.load({
 					background: "var(--dsw-specific-menu, var(--dsw-alias-bg-layer-3))",
 					boxShadow: "var(--dsw-shadow-lv3, 0 8px 24px rgba(0,0,0,.35))",
 					fontFamily: 'system-ui, "Segoe UI", sans-serif',
-					fontSize: "14px", lineHeight: "22px",   // 对齐面板/设置字号（2026-08-27 主需求）
+					fontSize: "14px", lineHeight: "22px",   // 对齐面板/设置字号（2026-08-27 用户需求）
 				});
 				// 菜单项：恢复会话（普通色）+ 删除会话（danger 红）
 				const mkItem = (text, danger) => {
@@ -1248,7 +1248,7 @@ window.__ModuleLoader__.load({
 				rowMenuEl.appendChild(del);
 				document.body.appendChild(rowMenuEl);
 				// 定位：按钮右上方弹出（左缘对齐按钮右缘、向上展开），空间不足才向下；
-				// 用真实宽高计算，避免菜单高度写死导致底部超屏（2026-09-01 主需求修复）
+				// 用真实宽高计算，避免菜单高度写死导致底部超屏（2026-09-01 用户需求修复）
 				const r = btn.getBoundingClientRect();
 				const rect = rowMenuEl.getBoundingClientRect();
 				const mw = rect.width, mh = rect.height;
@@ -1315,7 +1315,7 @@ window.__ModuleLoader__.load({
 						body: JSON.stringify({ sessionId: row.id }),
 					}).then((r) => r.json()).then((j) => {
 						if (j.ok) {
-							// 本地即时移除（不等 host 推送），2026-08-27 主需求
+							// 本地即时移除（不等 host 推送），2026-08-27 用户需求
 							removedIds.add(row.id);
 							render();
 						} else {
@@ -1467,7 +1467,7 @@ window.__ModuleLoader__.load({
 				if (mount() || tries > 30) clearInterval(timer);
 			}, 300);
 
-			// 设置面板打开时锁大纲（dsh 设置菜单在左侧弹出，鼠标划过大纲横杠会误展开遮挡；2026-08-27 主需求）
+			// 设置面板打开时锁大纲（dsh 设置菜单在左侧弹出，鼠标划过大纲横杠会误展开遮挡；2026-08-27 用户需求）
 			let settingsWasOpen = false;
 			setInterval(() => {
 				const isOpen = !!document.querySelector('[role="dialog"][aria-modal="true"], [role="dialog"][aria-hidden="false"], [role="dialog"]');
@@ -1482,7 +1482,7 @@ window.__ModuleLoader__.load({
 			root.id = HUD_ID;
 			Object.assign(root.style, {
 				position: "fixed", top: "14px", right: "14px", zIndex: "99992",
-				width: "180px", minWidth: "180px", boxSizing: "border-box",   // 2026-09-05 主调整：160→170
+				width: "180px", minWidth: "180px", boxSizing: "border-box",   // 2026-09-05 调整：160→170
 				padding: "10px 12px",
 				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
 				border: "1px solid var(--dsw-alias-border-l2)",
@@ -1524,11 +1524,11 @@ window.__ModuleLoader__.load({
 		}
 		function renderHud(hud, state) {
 			hud.grid.textContent = "";
-			// 三列：名称 | 数据 | 金额（主定稿 2026-08-17）
+			// 三列：名称 | 数据 | 金额（定稿 2026-08-17）
 			// 列布局用 CSS grid（grid 容器已设 grid-template-columns: 1fr auto auto）
 			const row = (label, value, cost, valueColor, costColor) => {
 				const d = document.createElement("div");
-				// 2026-09-05 主试调定稿：grid 列宽对齐——label 列宽取最长行、value 列随之对齐（上下对齐），金额列右贴
+				// 2026-09-05 试调定稿：grid 列宽对齐——label 列宽取最长行、value 列随之对齐（上下对齐），金额列右贴
 				Object.assign(d.style, {
 					display: "grid",
 					gridTemplateColumns: "50px auto 1fr",   // 2026-09-05 label 列固定 42px：各行数字起点统一
@@ -1556,7 +1556,7 @@ window.__ModuleLoader__.load({
 				d.appendChild(c);
 				return d;
 			};
-			// 六项：输入(命中) / 输入(未命中) / 命中率 / 输出 / 今日消耗 / 余额（主定稿 2026-08-17）
+			// 六项：输入(命中) / 输入(未命中) / 命中率 / 输出 / 今日消耗 / 余额（定稿 2026-08-17）
 			// 平台接口：inputHit/inputMiss 官方拆分，金额按类型官方精确值；
 			// 回落本地日志时命中=cacheRead，未命中=input-cacheRead，无金额
 			const hitTotal = state.inputHit !== undefined ? state.inputHit + state.inputMiss : state.input + state.cacheRead;
@@ -1568,10 +1568,10 @@ window.__ModuleLoader__.load({
 			hud.grid.appendChild(row("命中率", hitRate + "%", "—"));
 			hud.grid.appendChild(row("输出", fmt(state.output), money(state.outputCost)));
 			// 高峰/空闲状态：DeepSeek 峰谷定价（官网：工作日高峰=北京时间 9:00-12:00、14:00-18:00，
-			// 其余为空闲；2026-09-01 调价后周末全天为优惠/空闲时段），高峰红色显示（主 2026-08-19/09-01 要求）
+			// 其余为空闲；2026-09-01 调价后周末全天为优惠/空闲时段），高峰红色显示（2026-08-19/09-01 要求）
 			const peak = isDeepSeekPeak();
 			hud.grid.appendChild(row("花费", peak ? "高峰" : "空闲", state.cost !== null ? "¥" + state.cost.toFixed(1) : "—", peak ? "#f85149" : undefined));
-			// 余额 < 5 元红色警示（主 2026-08-19 要求）
+			// 余额 < 5 元红色警示（2026-08-19 要求）
 			const bal = state.balance !== null ? parseFloat(state.balance) : null;
 			hud.grid.appendChild(row("余额", "—", bal !== null ? "¥" + Number(bal).toFixed(1) : "…", undefined, bal !== null && bal < 5 ? "#f85149" : undefined));
 		}
@@ -1583,7 +1583,7 @@ window.__ModuleLoader__.load({
 
 		// DeepSeek 峰谷定价判定（官网 api-docs.deepseek.com/zh-cn/quick_start/pricing 原文）：
 		// "高峰时段为北京时间 9:00 - 12:00、14:00 - 18:00（其余为空闲时段）"
-		// 2026-09-01 调价：周末全天为优惠/空闲时段（主确认）。
+		// 2026-09-01 调价：周末全天为优惠/空闲时段（确认）。
 		// 按北京时间（UTC+8，不依赖本机时区），高峰红色显示。
 		function isDeepSeekPeak() {
 			const bj = new Date(Date.now() + 8 * 3600 * 1000);
@@ -1647,7 +1647,7 @@ window.__ModuleLoader__.load({
 		}
 
 				// ========== 左缘消息大纲条（当前会话我的消息，hover 展开） ==========
-		// 2026-08-17 主定稿（单元素设计，v1 基底）：横杠即面板——平时一列细横杠
+		// 2026-08-17 定稿（单元素设计，v1 基底）：横杠即面板——平时一列细横杠
 		// （每条=我的一条消息），hover 同一元素展开为完整大纲（横杠+行号+文本同一行，
 		// 天然垂直对齐）；位置：对话区滚动容器左内缘+4；最多显示 10 条（最近 10 条，
 		// 最新在下），多于 10 条展开时 box 内滚动条上下查找；
@@ -1937,7 +1937,7 @@ window.__ModuleLoader__.load({
 				row.appendChild(bar);
 				row.appendChild(num);
 				row.appendChild(txt);
-				// hover：整行变黑（横杠+文字）+ 更暗的行背景（15%，主 2026-08-17 定稿）
+				// hover：整行变黑（横杠+文字）+ 更暗的行背景（15%，2026-08-17 定稿）
 				row.addEventListener("mouseenter", () => {
 					row.style.background = "color-mix(in srgb, var(--dsw-alias-label-primary) 15%, transparent)";
 					bar.style.background = "var(--dsw-alias-label-primary)";
@@ -2024,7 +2024,7 @@ window.__ModuleLoader__.load({
 				}
 			}
 			box.addEventListener("mouseover", () => {
-				// 菜单/设置面板打开时锁大纲，避免划过大纲横杠弹出遮挡操作（2026-08-27 主需求）
+				// 菜单/设置面板打开时锁大纲，避免划过大纲横杠弹出遮挡操作（2026-08-27 用户需求）
 				if (window.__dshOutlineLock) return;
 				updateExpanded(true);
 			});
@@ -2101,7 +2101,7 @@ window.__ModuleLoader__.load({
 				try { sessions.list.subscribe(() => rebind()); } catch (e) {}
 			}
 			rebind();
-			// 等对话区渲染后定位 + 建立尺寸跟踪（2026-08-27 主需求：新客户端即时显示、侧边栏宽度变化跟随）
+			// 等对话区渲染后定位 + 建立尺寸跟踪（2026-08-27 用户需求：新客户端即时显示、侧边栏宽度变化跟随）
 			ensureOutlineTracking();
 			ensureRowObserver();
 			syncOutline();
@@ -2148,7 +2148,7 @@ window.__ModuleLoader__.load({
 				}
 			}
 			window.addEventListener("resize", placeOutline);
-			// 侧边栏宽度/布局变化 → 对话区尺寸变化 → 重定位横杠；对话区出现前用 MO 等待（2026-08-27 主需求）
+			// 侧边栏宽度/布局变化 → 对话区尺寸变化 → 重定位横杠；对话区出现前用 MO 等待（2026-08-27 用户需求）
 			let outlineTracking = false;
 			function ensureOutlineTracking() {
 				const root = findChatRoot();
@@ -2197,7 +2197,7 @@ window.__ModuleLoader__.load({
 				st.id = "dsh-msg-outline-style";
 				st.textContent = "." + OUTLINE_FLASH + "{animation:dshOutlineFlash 1.6s ease 1}"
 					+ "@keyframes dshOutlineFlash{0%,100%{background:transparent}15%,35%{background:rgba(255,200,0,.35)}}"
-					// 菜单/设置面板打开（锁定态）时整体隐藏大纲横杠（2026-08-27 主需求）
+					// 菜单/设置面板打开（锁定态）时整体隐藏大纲横杠（2026-08-27 用户需求）
 					+ "body.dsh-outline-locked #" + OUTLINE_RAIL_ID + "{display:none !important}";
 				document.head.appendChild(st);
 			}
@@ -2205,7 +2205,7 @@ window.__ModuleLoader__.load({
 			document.body.appendChild(box);
 		}
 
-			// ---- dsh 版本更新提示（主 2026-08-19 需求：有新版时右下角提示） ----
+			// ---- dsh 版本更新提示（2026-08-19 需求：有新版时右下角提示） ----
 			function checkDshUpdate() {
 				fetch("http://127.0.0.1:3081/api/dsh-version", { mode: "cors" })
 					.then((r) => (r.ok ? r.json() : Promise.reject(r.status)))
@@ -2222,7 +2222,7 @@ window.__ModuleLoader__.load({
 				if (document.getElementById("dsh-update-toast")) return;
 				const t = document.createElement("div");
 				t.id = "dsh-update-toast";
-				// 宽度与 Token HUD 一致（主 2026-08-19 要求）
+				// 宽度与 Token HUD 一致（2026-08-19 要求）
 				const hudEl = document.getElementById(HUD_ID);
 				const hudW = hudEl ? hudEl.offsetWidth : 210;
 				t.style.cssText = "position:fixed;right:16px;bottom:16px;z-index:99999;background:var(--dsw-alias-bg-layer-2);border:1px solid var(--dsw-alias-border-l2);color:var(--dsw-alias-label-primary);border-radius:10px;padding:12px 14px;font:12px/1.7 -apple-system,'Segoe UI',sans-serif;box-shadow:0 4px 18px rgba(0,0,0,.25);width:" + hudW + "px;box-sizing:border-box";
@@ -2269,7 +2269,7 @@ window.__ModuleLoader__.load({
 						});
 				};
 			}
-			// 打开终端面板并预输入 sudo 重启命令（主 2026-08-19 要求：等用户在终端输 sudo 密码）
+			// 打开终端面板并预输入 sudo 重启命令（2026-08-19 要求：等用户在终端输 sudo 密码）
 			function typeSudoRestart(statusEl) {
 				ensureTerminal(termState, termHost);
 				openPanel(TERM_PANEL_ID);
@@ -2280,13 +2280,13 @@ window.__ModuleLoader__.load({
 					if (s && s.term && s.ws && s.ws.readyState === WebSocket.OPEN) {
 						clearInterval(timer);
 						s.term.paste("sudo systemctl restart dsh-web");
-						// 回车走 WS 直发（paste 会包 bracketed paste 包装，\r 变普通字符不执行；主 2026-08-19 实测少回车）
+						// 回车走 WS 直发（paste 会包 bracketed paste 包装，\r 变普通字符不执行；2026-08-19 实测少回车）
 						setTimeout(() => {
 							const st = window.__dshTermState;
 							if (st && st.ws && st.ws.readyState === WebSocket.OPEN) st.ws.send("\r");
 						}, 250);
 						if (statusEl) statusEl.textContent += "\n请在终端输入 sudo 密码…";
-						// 2026-08-20 主要求：手动重启完成后自动刷新页面。
+						// 2026-08-20 用户要求：手动重启完成后自动刷新页面。
 						// 轮询版本接口：hasUpdate 变 false（本地=最新，更新已生效）且 dsh-web 页面可访问时自动刷新；
 						// 轮询 3081（独立进程，dsh-web 重启不影响），超时 6 分钟停止等待。
 						let pollTries = 0;

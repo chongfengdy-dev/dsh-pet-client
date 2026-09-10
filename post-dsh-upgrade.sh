@@ -2,7 +2,7 @@
 # post-dsh-upgrade.sh — dsh 升级（npm i -g @deepseek-ai/dsh）之后必做的收尾。
 #
 # 为什么需要：dsh 升级会覆盖 node_modules，我们在里面打的补丁全部失效；
-# 同时少数内部 API 可能改名，配套插件需要复核。2026-09-10 主定。
+# 同时少数内部 API 可能改名，配套插件需要复核。2026-09-10 定。
 #
 # 用法（升级完 dsh 后跑一次即可，幂等、可重复执行）：
 #     bash ~/deepseek-harness/nim-client/post-dsh-upgrade.sh          # 只检查 + 重打两处补丁
@@ -128,7 +128,7 @@ if [ -f "$ROOT/clean.patch.yml" ]; then
 fi
 
 echo
-echo "[4/4] 重启服务（需要主手动，脚本不代劳）"
+echo "[4/4] 重启服务（需要手动，脚本不代劳）"
 echo "     sudo systemctl restart dsh-web dsh-terminal"
 echo "     然后刷新浏览器（Ctrl+Shift+R）"
 

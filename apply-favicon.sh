@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # apply-favicon: 把 dsh web 的站点图标(PWA/标签 favicon)替换为 DSH-Pet-Client 黑鲸。
 # 用途：PWA「DeepSeek Harness」安装时从服务端 favicon.svg 取图标，
-# 官方默认是 dsh logo（黑/白剪影）。主 2026-09-06 要求换成我们的鲸鱼，
+# 官方默认是 dsh logo（黑/白剪影）。2026-09-06 要求换成我们的鲸鱼，
 # 2026-09-10 起改为黑色鲸鱼（素材 fish_black 256px，与 fish_blue 同一路子从 ico 提取）。
 #
 # 注意：dsh 升级(npm i -g @deepseek-ai/dsh)会覆盖 node_modules → 升级后重跑本脚本。

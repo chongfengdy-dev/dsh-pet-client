@@ -1,6 +1,6 @@
 # DSH Nim 桌面客户端 (v2.2 浏览器化：winim 宠物壳)
 # 功能: 悬浮鲸鱼(四色状态机) | 托盘 | 默认浏览器打开 3080 | 开机自启
-# v2.2 架构(2026-09-06 主拍板)：去掉 WebView2 独立窗口——对话界面改用默认
+# v2.2 架构(2026-09-06 拍板)：去掉 WebView2 独立窗口——对话界面改用默认
 # 浏览器访问 127.0.0.1:3080(dsh web 本就是 web 应用)；壳层只留桌面鲸鱼+托盘
 # (鲸鱼用途=提醒干活进度)。L 手势/窗口重建/token 交换等壳层逻辑全部移除。
 import winim
@@ -22,7 +22,7 @@ const
   WebUrl = "http://127.0.0.1:3080"
   WebTokenFile = "dsh-web-token.txt"   # 认证引导 token 文件（exe 同目录；PWA/标签首次打开带 token 种 cookie）
   AppId = "dsh_nim_client"
-  FLOAT_ANIM_MS = 16        # 悬浮动画帧间隔（60fps 定稿；主实测 60fps 开宠物稳定——降频无关，
+  FLOAT_ANIM_MS = 16        # 悬浮动画帧间隔（60fps 定稿；实测 60fps 开宠物稳定——降频无关，
                             # 稳定关键是无窗口挂钩，见主循环注释）
   # 托盘自定义消息
   WM_TRAYICON = WM_APP + 1
@@ -36,7 +36,7 @@ const
 
 # ---- dsh web 认证引导（2026-09-05：dsh 0.1.2-rc.1 起 web 需浏览器认证）----
 # 浏览器/WebView 首次必须带 token 访问一次：服务端校验通过后种下持久 cookie
-# （默认 30 天），此后普通访问免认证。主浏览器已各自完成认证；本壳只负责
+# （默认 30 天），此后普通访问免认证。浏览器已各自完成认证；本壳只负责
 # 拉起默认浏览器时带上 token（幂等：cookie 已有效时等于续期）。
 # 用法：把 dsh web 启动时打印的完整 URL（含 ?token=，或只存 token 本身）
 # 写入 exe 同目录 dsh-web-token.txt 后启动客户端。
@@ -60,7 +60,7 @@ var
   gTrayData: NOTIFYICONDATAW
   gRunning = true
   gQuitting = false
-  gPetVisible = true        # 悬浮宠物显示状态（2026-08-16 主定稿：默认打开；托盘开关控制）
+  gPetVisible = true        # 悬浮宠物显示状态（2026-08-16 定稿：默认打开；托盘开关控制）
   gFloatHwnd: HWND          # 悬浮宠物窗口句柄（托盘开关也要用）
 
 # ---------- 全局句柄 ----------
@@ -70,7 +70,7 @@ var gHostHwnd: HWND         # 托盘宿主窗口（宠物右键菜单 owner，�
 # ---------- 托盘 ----------
 
 proc loadWhaleIcon(size: int32, color: int = 0): HICON =
-  ## 加载鲸鱼图标（0=蓝 1=黑 2=橙 3=绿；用主提供的 deepseek-color-* 生成的四色 ico）
+  ## 加载鲸鱼图标（0=蓝 1=黑 2=橙 3=绿；用提供的 deepseek-color-* 生成的四色 ico）
   const icoFiles = ["assets\\fish_blue.ico", "assets\\fish_black.ico",
                     "assets\\fish_orange.ico", "assets\\fish_green.ico"]
   let idx = if color >= 0 and color <= 3: color else: 0
@@ -199,7 +199,7 @@ proc omniWndProc(hwnd: HWND, lParam: LPARAM): WINBOOL {.stdcall.} =
 
 proc isPwaWindow(hwnd: HWND): bool =
   ## PWA 独立应用窗口没有地址栏；普通浏览器窗口有 Chrome_OmniboxView。
-  ## 2026-09-10 主需求：浏览器标签与 PWA 独立窗口标题同为 "DeepSeek Harness"，
+  ## 2026-09-10 用户需求：浏览器标签与 PWA 独立窗口标题同为 "DeepSeek Harness"，
   ## 靠地址栏有无把两者区分开，优先跟随 PWA（否则最小化 PWA 时鲸鱼不变黑）。
   gOmniHit = false
   discard EnumChildWindows(hwnd, omniWndProc, LPARAM(0))
@@ -324,7 +324,7 @@ proc wndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESULT {.s
         discard ShowWindow(gFloatHwnd, SW_HIDE)
       result = 0
     of ID_TRAY_EXIT:
-      # v2.2 主需求：退出宠物时一并关闭 dsh 对话窗口(PWA)——投递 WM_CLOSE 后稍等
+      # v2.2 用户需求：退出宠物时一并关闭 dsh 对话窗口(PWA)——投递 WM_CLOSE 后稍等
       # 其处理，再退出本进程。注：若命中窗口是含 dsh 页面的浏览器标签窗口也会被关。
       let dw = findDshWindow()
       if dw != 0:
@@ -368,11 +368,11 @@ const
   MAX_BUBBLES = 12          # 最多泡泡数
   FISH_BIN_W = FISH_DRAW    # 鲸鱼像素宽（fish_*.bin）
   FISH_BIN_H = FISH_DRAW    # 鲸鱼像素高
-  # 四色鲸鱼（BGRA 预乘，主提供 deepseek-color-{blue,black,Orange,green}.png 制作，80x80）
-  FISH_BIN_BLUE = "assets\\fish_blue.bin"    # 窗口打开（默认，2026-08-21 主定：打开=蓝）
-  FISH_BIN_BLACK = "assets\\fish_black.bin"  # 窗口最小化（2026-08-21 主定：最小化=黑）
+  # 四色鲸鱼（BGRA 预乘，提供 deepseek-color-{blue,black,Orange,green}.png 制作，80x80）
+  FISH_BIN_BLUE = "assets\\fish_blue.bin"    # 窗口打开（默认，2026-08-21 定：打开=蓝）
+  FISH_BIN_BLACK = "assets\\fish_black.bin"  # 窗口最小化（2026-08-21 定：最小化=黑）
   FISH_BIN_ORANGE = "assets\\fish_orange.bin" # 提问/要授权（心跳闪烁）
-  FISH_BIN_GREEN = "assets\\fish_green.bin"  # 回复完成（绿↔基态心跳闪烁，2026-08-21 主需求）
+  FISH_BIN_GREEN = "assets\\fish_green.bin"  # 回复完成（绿↔基态心跳闪烁，2026-08-21 用户需求）
 
 type
   Bubble = object
@@ -412,13 +412,13 @@ var
   gAsking = false           # 是否正在提问/要授权（橙色心跳，来自状态文件）
   gDoneReply = false        # 回复是否完成（绿色常亮；停靠=exe 检测 PWA 窗口置前写 ack，旧版同语义）
   gPetDoneAt: int64 = 0     # 最近一次 green 的 doneAt（时间戳，写 ack 用）
-  gPetDoneAcked = false     # 本次 green 是否已 ack（PWA 窗口置前=主已看到回复 → 不再绿）
+  gPetDoneAcked = false     # 本次 green 是否已 ack（PWA 窗口置前=用户已看到回复 → 不再绿）
   gDibBits: ptr UncheckedArray[uint32]   # DIB 像素（96x96 BGRA 预乘）
   gMemDC: HDC
 
 proc applyPetIconColor() =
   ## 托盘 + 任务栏图标同步为当前显示色（蓝0/黑1/橙2/绿3），并释放旧句柄防泄漏。
-  ## 2026-08-16 主验收要求：托盘/任务栏图标与悬浮宠物同色且同相位交替闪烁——
+  ## 2026-08-16 验收要求：托盘/任务栏图标与悬浮宠物同色且同相位交替闪烁——
   ## 显示色相位与 floatPaint 完全一致：提问中(gPetColor==2)或回复完成(gPetColor==3)
   ## 且闪烁相位 OFF 时显示基态色(gPetBaseColor)，否则显示 gPetColor。每 400ms 由主循环闪烁分支调用。
   let dispColor = if gPetColor >= 2 and not gPetBlinkOn: gPetBaseColor else: gPetColor
@@ -608,7 +608,7 @@ proc floatPaint(hwnd: HWND) =
   zeroMem(gDibBits, FLOAT_W * FLOAT_H * sizeof(uint32))
   # 2. 鲸鱼（over 合成，预乘；颜色按 gPetColor：0=蓝 1=黑 2=橙 3=绿）
   #    提问闪烁（橙）/回复完成闪烁（绿）时交替绘制"基态色"（打开=蓝 / 最小化=黑），
-  #    即蓝↔橙/绿 或 黑↔橙/绿 交替（主 2026-08-16 定稿橙；2026-08-21 同法加绿、基态色交换）
+  #    即蓝↔橙/绿 或 黑↔橙/绿 交替（2026-08-16 定稿橙；2026-08-21 同法加绿、基态色交换）
   if gFishPixelsLoaded:
     let drawColor = if gPetColor >= 2 and not gPetBlinkOn: gPetBaseColor else: gPetColor
     let fx = int(gFishX) - FISH_BIN_W div 2
@@ -710,7 +710,7 @@ proc floatInit() =
     gFishX = FLOAT_W / 2.0
     gFishY = FLOAT_H / 2.0
     if gPetVisible:
-      # 显示宠物（2026-08-16 主定稿：默认打开，托盘可隐藏）
+      # 显示宠物（2026-08-16 定稿：默认打开，托盘可隐藏）
       discard SetTimer(gFloatHwnd, 1, FLOAT_ANIM_MS, nil)
       discard ShowWindow(gFloatHwnd, SW_SHOWNOACTIVATE)
       # 首次渲染（窗口显示后 UpdateLayeredWindow 才生效）
@@ -738,9 +738,9 @@ proc fetchPetState(): int =
   ## 读 Windows 侧本地状态文件（终端服务写入），返回 0=蓝 1=黑 2=橙 3=绿。
   ## 2026-08-16 崩溃修复：原 HTTP 轮询（net 模块 send/recv）在 Windows 触发
   ## 0xc0000005 访问冲突导致进程崩溃；改为读本地文件（纯文件 I/O，零网络）。
-  ## 路径动态化（2026-08-16 主定稿）：%USERPROFILE%\\pet-state.json——
+  ## 路径动态化（2026-08-16 定稿）：%USERPROFILE%\\pet-state.json——
   ## 服务端写 Windows 用户目录根，不再硬编码用户名，换机可部署。
-  ## v2.2：绿色停靠 = 本壳检测 PWA 窗口被置前(主看到)后写 pet-ack.json（server 转 blue），
+  ## v2.2：绿色停靠 = 本壳检测 PWA 窗口被置前(用户看到)后写 pet-ack.json（server 转 blue），
   ## 与旧版"主窗口置前即停"同语义，纯净/完整模式都不依赖页面 JS。
   try:
     let body = readFile(getEnv("USERPROFILE") & "\\pet-state.json")
@@ -760,7 +760,7 @@ proc fetchPetState(): int =
     return -1
 
 proc writePetAck() =
-  ## PWA 对话窗口被置前(=主已看到回复) → 写回执文件 pet-ack.json（server 见
+  ## PWA 对话窗口被置前(=用户已看到回复) → 写回执文件 pet-ack.json（server 见
   ## ack.doneAt >= green.doneAt 转 blue）。2026-09-06 v2.2 恢复（旧版同机制；
   ## 不用 HTTP——Nim 主循环禁网络调用，Windows 下 net 模块会 0xc0000005）
   try:
@@ -779,7 +779,7 @@ when isMainModule:
   discard SetProcessDPIAware()
 
   # ---- 单实例：已有实例在跑 → 通知它"呼出主窗口(PWA)"并退出本实例 ----
-  # 重复双击 exe / 开机自启重叠都不会叠开多个宠物（2026-09-06 主需求）
+  # 重复双击 exe / 开机自启重叠都不会叠开多个宠物（2026-09-06 用户需求）
   gSingleMutex = CreateMutexW(nil, FALSE, newWideCString(SingleMutexName))
   if GetLastError() == ERROR_ALREADY_EXISTS:
     let hEv = CreateEventW(nil, FALSE, FALSE, newWideCString(ActivateEventName))
@@ -807,7 +807,7 @@ when isMainModule:
   floatInit()
   dbg("after floatInit")
 
-  # v2.2 主需求：启动即自动拉起 PWA 对话窗口（出现鲸鱼 + 打开对话，等效旧版开机开窗；
+  # v2.2 用户需求：启动即自动拉起 PWA 对话窗口（出现鲸鱼 + 打开对话，等效旧版开机开窗；
   # 窗口已在则不重复开）。无 PWA 回落默认浏览器打开 3080。
   toggleDshApp()
 
@@ -842,7 +842,7 @@ when isMainModule:
     else:
       gMouseInside = false  # 拖动时不跟随
 
-    # ---- dsh 窗口状态：即时跟随基态色（v2.2.1 主需求，同旧独立窗口感知）----
+    # ---- dsh 窗口状态：即时跟随基态色（v2.2.1 用户需求，同旧独立窗口感知）----
     # 命中窗口后 50ms 单窗口快查（IsWindow/IsIconic 廉价调用，零枚举 → 即时变色，
     # 等效旧版每帧跟随）；窗口未命中(未开/被关)时 1s 低频 EnumWindows 重新找。
     let petTick = GetTickCount64()
@@ -873,8 +873,8 @@ when isMainModule:
       if c != 3:
         gPetDoneAcked = false
     # 绿色保持（旧版同语义）：PWA 对话窗口被置前(GetForegroundWindow==命中窗口、
-    # 非最小化) = 主已看到回复 → 写 ack → server 转 blue 停绿。
-    # 主点鲸鱼呼出窗口后窗口变前台即触发；点成最小化则窗口非前台保持绿(提示仍在)。
+    # 非最小化) = 用户已看到回复 → 写 ack → server 转 blue 停绿。
+    # 点鲸鱼呼出窗口后窗口变前台即触发；点成最小化则窗口非前台保持绿(提示仍在)。
     if gDoneReply and not gPetDoneAcked and gDshHwnd != 0 and
        GetForegroundWindow() == gDshHwnd and IsIconic(gDshHwnd) == 0:
       gPetDoneAcked = true
@@ -897,7 +897,7 @@ when isMainModule:
       floatPaint(gFloatHwnd)
       applyPetIconColor()   # 托盘图标跟随宠物色（蓝/黑/橙/绿）
       dbg("pet color -> " & $target)
-    # 提问(橙)心跳闪烁；回复完成(绿)常亮不闪（2026-08-27 主需求：绿不闪）
+    # 提问(橙)心跳闪烁；回复完成(绿)常亮不闪（2026-08-27 用户需求：绿不闪）
     if gPetColor == 2 and petTick - gPetBlinkTick >= 400:
       gPetBlinkTick = petTick
       gPetBlinkOn = not gPetBlinkOn

@@ -19,7 +19,7 @@ const HOST = '127.0.0.1';
 
 const app = express();
 // no-store：终端页面每次重开都取最新版（WebView2 会缓存静态资源，
-// 之前改完页面主端仍显示旧版很可能就是缓存）
+// 之前改完页面侧仍显示旧版很可能就是缓存）
 app.use(express.static(path.join(__dirname, 'public'), {
   setHeaders: (res) => {
     res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
@@ -85,17 +85,17 @@ app.post('/api/background', (req, res) => {
 
 // ---------- 宠物状态（dsh web 插件 → 客户端 Nim） ----------
 // pet: 'blue'（终端收起，默认）| 'black'（终端打开）| 'orange'（提问/授权，心跳闪烁）
-//     | 'green'（回复完成，绿↔基态心跳闪烁；2026-08-21 主需求：提问后 dsh 干完活绿闪提示）
+//     | 'green'（回复完成，绿↔基态心跳闪烁；2026-08-21 用户需求：提问后 dsh 干完活绿闪提示）
 // 状态同时写本地文件（客户端 Nim 读文件，避免主循环 HTTP 网络调用——
 // 实测 net 模块 send/recv 在 Windows 触发 0xc0000005 访问冲突崩溃）
-// 路径动态化（2026-08-16 主定稿）：写 Windows 用户目录根 pet-state.json，
+// 路径动态化（2026-08-16 定稿）：写 Windows 用户目录根 pet-state.json，
 // 客户端 Nim 用 %USERPROFILE% 读同一位置——不再硬编码用户名/路径，换机可部署
 // green 的终止协议（2026-08-21）：Nim 检测到主窗口被提到最前（GetForegroundWindow）
 // → 写 %USERPROFILE%\pet-ack.json {doneAt} 回执；server 见 ack.doneAt >= green.doneAt
-// → 转回 blue（主已看到回复）。ack 文件由 Nim 只写、server 只读。
+// → 转回 blue（用户已看到回复）。ack 文件由 Nim 只写、server 只读。
 let petState = { pet: 'blue' };
 const GREEN_DONE_WINDOW_MS = 10 * 60 * 1000;  // 仅"最近 10 分钟内完成"的轮次发绿（防历史老轮次误报）
-// 绿色保持到"主看到"（v2.2 与旧版同语义）：停靠由 Nim 壳检测 PWA 窗口置前 →
+// 绿色保持到"用户看到"（v2.2 与旧版同语义）：停靠由 Nim 壳检测 PWA 窗口置前 →
 // 写 %USERPROFILE%\pet-ack.json → 本监听见 ack.doneAt >= green.doneAt 转 blue。
 // 页面 focus 上报 /api/pet-ack 仍是快速路径（完整模式）。
 let lastAckMtime = 0;
@@ -139,7 +139,7 @@ function writePetStateFile() {
   }
 }
 // ---------- 终端状态持久化（设置/几何存服务端文件，跨重启保留） ----------
-// 背景：WebView2 缓存目录（webui 随机/固定问题）不可靠，主 2026-08-16 定稿——
+// 背景：WebView2 缓存目录（webui 随机/固定问题）不可靠，2026-08-16 定稿——
 // 设置与面板几何存 WSL 服务端文件，插件启动读、改动写，彻底持久
 const TERM_STATE_FILE = path.join(__dirname, 'term-state.json');
 app.get('/api/term-state', (req, res) => {
@@ -168,9 +168,9 @@ app.post('/api/pet-state', (req, res) => {
   writePetStateFile();
   res.json(petState);
 });
-// v2.2 浏览器化：页面聚焦 = 主已看到回复 → green 转 blue 停绿闪
+// v2.2 浏览器化：页面聚焦 = 用户已看到回复 → green 转 blue 停绿闪
 // （原 Nim WebView 版：窗口置前写 pet-ack.json；浏览器方案由 term-panels
-// 页面在 visibilitychange/focus 时 POST 本端点，语义等价"主看到回复"）
+// 页面在 visibilitychange/focus 时 POST 本端点，语义等价"用户看到回复"）
 app.post('/api/pet-ack', (req, res) => {
   if (petState.pet === 'green') {
     petState = { pet: 'blue' };
@@ -178,7 +178,7 @@ app.post('/api/pet-ack', (req, res) => {
   }
   res.json({ ok: true });
 });
-// ---------- 会话删除 / 恢复（已归档会话管理，2026-08-27 主需求） ----------
+// ---------- 会话删除 / 恢复（已归档会话管理，2026-08-27 用户需求） ----------
 // dsh 核心无删除/取消归档 API：
 //  - 删除：删文件 ~/.dsh/sessions/<工作区>/session-<uuid>/，fs.watch 自动刷新列表
 //  - 恢复：从 ~/.dsh/storages/workspace.json 移除 archivedSessionIds 标记 + 重启 dsh web
@@ -256,7 +256,7 @@ app.post('/api/session-unarchive', (req, res) => {
   }
 });
 // ---------- 横杠大纲历史持久化（服务端文件，跨重启保留） ----------
-// 主 2026-08-17 定稿：横杠记录要"关机也能找回来"，走服务端文件（localStorage 在
+// 2026-08-17 定稿：横杠记录要"关机也能找回来"，走服务端文件（localStorage 在
 // WebView2 缓存目录下不可靠）。按会话 ID 存 [{text}] 列表；插件启动读、来一条写一条。
 const OUTLINE_HISTORY_FILE = path.join(__dirname, 'outline-history.json');
 app.get('/api/outline-history', (req, res) => {
@@ -287,7 +287,7 @@ app.post('/api/outline-history', (req, res) => {
 // 有未决提问 → orange；回复完成（turn 配对，用户提问触发的轮次）→ green；否则 blue
 // （黑/蓝由客户端本地按窗口状态决定）。
 // 前端事件通道（subscribeEnvelopes）是诊断用途收不到业务事件，改后端检测。
-// 事件驱动（2026-08-16 主要求省资源）：fs.watch 监听会话目录，有写入才检测
+// 事件驱动（2026-08-16 用户要求省资源）：fs.watch 监听会话目录，有写入才检测
 // （防抖合并），静默期零检测零消耗；不再固定 2 秒轮询解压。
 // 每次检测都写文件（不能只写"变化时"——服务重启内存重置 blue 后，旧文件
 // orange 永不被覆盖，Nim 会一直读到橙色闪烁；2026-08-16 实测踩坑）
@@ -374,7 +374,7 @@ app.get('/api/today-usage', (req, res) => {
   refreshTodayUsage();   // 异步触发聚合（下次请求拿到新值）
 });
 app.get('/api/balance', (req, res) => {
-  if (balanceCache.data && Date.now() - balanceCache.at < 30000) {  // 余额 30s 缓存（2026-08-21 主定）
+  if (balanceCache.data && Date.now() - balanceCache.at < 30000) {  // 余额 30s 缓存（2026-08-21 定）
     return res.json(balanceCache.data);
   }
   const key = readDeepSeekKey();
@@ -403,12 +403,12 @@ app.get('/api/balance', (req, res) => {
   req2.end();
 });
 
-// ---------- dsh 版本检测（2026-08-19 主要求：有新版时前端提示） ----------
-// ⚠️ DEMO_MODE = 演示模式（给主演示提示条/更新流程）：模拟有新版 rc.8、点更新跳过真实安装。
+// ---------- dsh 版本检测（2026-08-19 用户要求：有新版时前端提示） ----------
+// ⚠️ DEMO_MODE = 演示模式（演示提示条/更新流程）：模拟有新版 rc.8、点更新跳过真实安装。
 //    恢复真实逻辑：DEMO_MODE 改 false，/api/dsh-version 走 30min 缓存 npm 查询，/api/dsh-update 走真实 npm install。
-const DEMO_MODE = false;  // 已恢复真实逻辑（2026-08-19 主验收演示后关闭）
+const DEMO_MODE = false;  // 已恢复真实逻辑（2026-08-19 验收演示后关闭）
 let dshVerCache = { at: 0, data: null };
-// 动态取用户 home，不硬编码用户名（2026-08-25 主要求：发布代码不含个人电脑名）
+// 动态取用户 home，不硬编码用户名（2026-08-25 用户要求：发布代码不含个人电脑名）
 const DSH_HOME = os.homedir();
 const DSH_LOCAL_PKG = DSH_HOME + '/.npm-global/lib/node_modules/@deepseek-ai/dsh/package.json';
 // ⚠️ 用 fs 读版本而非 require()：require 有模块缓存，npm install 更新后进程内仍读到旧版本
@@ -443,9 +443,9 @@ app.get('/api/dsh-version', (req, res) => {
   res.json(dshVerCache.data || { local: null, latest: null, hasUpdate: false, note: 'checking' });
 });
 
-// ---------- dsh 一键更新（2026-08-19 主要求：提示条点「更新」即执行） ----------
+// ---------- dsh 一键更新（2026-08-19 用户要求：提示条点「更新」即执行） ----------
 app.post('/api/dsh-update', (req, res) => {
-  // 演示模式：跳过真实安装，直接返回成功（主 2026-08-19 要求：演示流程不真更新）
+  // 演示模式：跳过真实安装，直接返回成功（2026-08-19 要求：演示流程不真更新）
   if (DEMO_MODE) return res.json({ ok: true, local: '0.1.0-rc.9-demo', restarted: false });
   const { execFile } = require('child_process');
   execFile('/usr/bin/npm', ['install', '-g', '@deepseek-ai/dsh', '--cache', '/tmp/npm-cache-dsh-update'], { timeout: 180000 }, (err, stdout, stderr) => {
@@ -459,7 +459,7 @@ app.post('/api/dsh-update', (req, res) => {
 });
 
 // ---------- 平台用量代理（Token HUB 六项数据源：输入命中/未命中/输出/今日消耗） ----------
-// 2026-08-17 主定稿：余额走官方 API（/api/balance），其余走 DeepSeek 开放平台
+// 2026-08-17 定稿：余额走官方 API（/api/balance），其余走 DeepSeek 开放平台
 // 私有用量接口（platform.deepseek.com/api/v0/usage/amount|cost，需网页登录 token）。
 // 干跑实测：必须带浏览器特征头（UA/Origin/Referer），否则平台 WAF 拦截（Request Blocked）。
 // 返回结构：amount 的 biz_data 是对象 {total, days}；cost 的 biz_data 是数组
@@ -477,9 +477,9 @@ function readPlatformToken() {
   } catch (e) { return null; }
 }
 
-// 自动刷新平台 token（2026-08-25 主要求：不再手动 F12 找 token）。
+// 自动刷新平台 token（2026-08-25 用户要求：不再手动 F12 找 token）。
 // 读 CentBrowser localStorage（platform.deepseek.com userToken，明文 LevelDB），
-// 主一直登录着开放平台 → token 随时可取。由 fetch-platform-token.py 完成。
+// 一直登录着开放平台 → token 随时可取。由 fetch-platform-token.py 完成。
 let platformTokenRefreshing = false;
 function autoRefreshPlatformToken() {
   if (platformTokenRefreshing) return Promise.resolve(false);
@@ -603,7 +603,7 @@ async function refreshPlatformUsage() {
     ]);
     platformUsageCache = { at: Date.now(), data: buildUsage(amount, cost), error: null };
   } catch (e) {
-    // token 失效（401/403）→ 自动刷新后重试一次（2026-08-25 主要求：不手动 F12）
+    // token 失效（401/403）→ 自动刷新后重试一次（2026-08-25 用户要求：不手动 F12）
     if (e && e.authFailed) {
       console.log('[term] platform token invalid -> auto refresh & retry');
       const ok = await autoRefreshPlatformToken();
