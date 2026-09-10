@@ -1356,7 +1356,7 @@ window.__ModuleLoader__.load({
 				title.textContent = "恢复会话";
 				Object.assign(title.style, { fontSize: "15px", fontWeight: "600", marginBottom: "8px" });
 				const desc = document.createElement("div");
-				desc.textContent = "会话「" + row.title + "」已归档，恢复后才能访问。\n恢复后页面将自动刷新，会话回到会话列表。";
+				desc.textContent = "会话「" + row.title + "」已归档，恢复后才能访问。\n恢复后即刻生效：会话回到列表（dsh-archive-sync 插件在进程内同步，无需重启 dsh-web）。";
 				Object.assign(desc.style, {
 					fontSize: "13px", lineHeight: "1.6",
 					color: "var(--dsw-alias-label-secondary)", marginBottom: "16px",
@@ -1399,8 +1399,11 @@ window.__ModuleLoader__.load({
 								color: "var(--dsw-alias-label-primary)", fontSize: "13px",
 								fontFamily: 'system-ui, "Segoe UI", sans-serif',
 							});
-							tip.textContent = "已恢复，页面即将刷新…";
+							// 2026-09-10：不再靠重启 dsh-web —— dsh-archive-sync 插件同步内存后，
+							// workspaces.list 推送会自动刷新列表（本面板已 subscribe）。
+							tip.textContent = "已恢复，会话已回到列表";
 							document.body.appendChild(tip);
+							setTimeout(() => { try { tip.remove(); } catch (e) {} }, 2600);
 						} else {
 							alert("恢复失败：" + (j.error || "未知错误"));
 							close();

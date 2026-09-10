@@ -1,0 +1,6 @@
+# dsh-archive-sync：把外部对 workspace.json 归档集合的修改同步进 dsh 内存。
+# 以 cordis loader entry 注册（insert.name = 模块包名，经 profile node_modules 解析到本包）。
+- insert:
+    - id: dsh-archive-sync
+      name: dsh-archive-sync
+      config: {}

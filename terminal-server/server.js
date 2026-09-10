@@ -246,18 +246,10 @@ app.post('/api/session-unarchive', (req, res) => {
     fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
     fs.renameSync(tmp, WORKSPACE_STATE_FILE);
     console.log('[session-unarchive] restored', fullId);
-    // 重启 dsh web（Restart=always，systemd 自动拉起）让 host 重载归档状态
-    try {
-      const cp = require('child_process');
-      const out = cp.execSync("ps -eo pid,args | grep 'dsh web' | grep -v grep | awk '{print $1}'", { encoding: 'utf8' });
-      const pid = String(out).trim().split('\n')[0];
-      if (pid) {
-        process.kill(Number(pid), 'SIGTERM');
-        console.log('[session-unarchive] dsh web restart triggered pid=' + pid);
-      }
-    } catch (e) {
-      console.log('[session-unarchive] web restart failed:', e.message);
-    }
+    // 2026-09-10：不再重启 dsh web。
+    // 原实现靠 SIGTERM 重启让 host 重读 workspace.json（每次恢复要等 3-5 秒 + 手动刷新）。
+    // 现在由 dsh-archive-sync 插件在 dsh 进程内轮询该文件并同步内存（setState），
+    // 恢复瞬间生效、零重启；插件缺失时最坏回落到"重启一次"的老行为。
     res.json({ ok: true });
   } catch (e) {
     res.status(500).json({ error: e.message });
