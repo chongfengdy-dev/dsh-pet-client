@@ -10,7 +10,7 @@
 #     bash ~/deepseek-harness/nim-client/post-dsh-upgrade.sh --rollback  # 出事时从最近备份还原 wechat 依赖
 #
 # ⚠️ --fix 已知坑（2026-09-10 实测）：只升依赖、不升 dsh-wechat 插件 → 服务启动失败
-#     （ERR_PACKAGE_PATH_NOT_EXPORTED）。依赖与插件必须同代；出事用 --rollback 还原。
+#     （ERR_PACKAGE_PATH_NOT_EXPORTED）。修法：mnemon 全家一起升（脚本已内置）。
 #
 # 需要提权的地方（写全局包）脚本会明确提示，其余都是只读检查。
 set -uo pipefail
@@ -93,16 +93,24 @@ if [ -d "$WP/node_modules/@deepseek-ai" ]; then
     echo "     然后重启：sudo systemctl restart dsh-wechat"
     if [ "$FIX" = "1" ]; then
       echo "     ⚠️ 警告：只有【同时升级 dsh-wechat 插件】时才应执行本步。"
-      echo "        2026-09-10 实测：仅升依赖会让 dsh-wechat 启动失败（ERR_PACKAGE_PATH_NOT_EXPORTED）。"
+      echo "        2026-09-10 实测：@deepseek-ai 升级没问题，但 mnemon 只升主包会启动失败"
       echo "        出事后可一键回滚：bash $0 --rollback"
       echo "     --fix 已启用，开始对齐（原 package.json 会先备份）…"
       cp "$WP/package.json" "$HOME/.dsh/backup/wechat-package.json.bak-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
       mkdir -p "$WP/node_modules/@deepseek-ai"
       cp -r "$GLOBAL/node_modules/@deepseek-ai/." "$WP/node_modules/@deepseek-ai/" && echo "       ✅ 官方包已同步（$(ls "$WP/node_modules/@deepseek-ai" | wc -l) 个）"
-      WEBM="$HOME/.dsh/profiles/web/node_modules/dsh-mnemon"
-      if [ -d "$WEBM" ]; then
-        rm -rf "$WP/node_modules/dsh-mnemon"
-        cp -r "$WEBM" "$WP/node_modules/dsh-mnemon" && echo "       ✅ dsh-mnemon 已同步为 web profile 的版本"
+      # mnemon 必须全家一起升：只升主包会让配套子包缺导出（实测
+      # dsh-mnemon-source-memory-spaces 的 ./native-cli 找不到 → ERR_PACKAGE_PATH_NOT_EXPORTED）
+      WEBNM="$HOME/.dsh/profiles/web/node_modules"
+      if [ -d "$WEBNM/dsh-mnemon" ]; then
+        n=0
+        for d in "$WEBNM"/dsh-mnemon*; do
+          [ -d "$d" ] || continue
+          pkg="$(basename "$d")"
+          rm -rf "$WP/node_modules/$pkg"
+          cp -r "$d" "$WP/node_modules/$pkg" && n=$((n+1))
+        done
+        echo "       ✅ mnemon 全家已同步（$n 个包；主包与配套子包必须同批升级）"
       fi
       echo "       → 请重启：sudo systemctl restart dsh-wechat"
     else
