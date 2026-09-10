@@ -6,7 +6,11 @@
 #
 # 用法（升级完 dsh 后跑一次即可，幂等、可重复执行）：
 #     bash ~/deepseek-harness/nim-client/post-dsh-upgrade.sh          # 只检查 + 重打两处补丁
-#     bash ~/deepseek-harness/nim-client/post-dsh-upgrade.sh --fix    # 额外自动对齐 wechat profile 依赖
+#     bash ~/deepseek-harness/nim-client/post-dsh-upgrade.sh --fix       # 对齐 wechat profile 依赖（危险，见下）
+#     bash ~/deepseek-harness/nim-client/post-dsh-upgrade.sh --rollback  # 出事时从最近备份还原 wechat 依赖
+#
+# ⚠️ --fix 已知坑（2026-09-10 实测）：只升依赖、不升 dsh-wechat 插件 → 服务启动失败
+#     （ERR_PACKAGE_PATH_NOT_EXPORTED）。依赖与插件必须同代；出事用 --rollback 还原。
 #
 # 需要提权的地方（写全局包）脚本会明确提示，其余都是只读检查。
 set -uo pipefail
@@ -16,6 +20,27 @@ ROOT="$(cd "$(dirname "$0")" && pwd)"
 # --fix：检测到 wechat profile 依赖滞后时自动对齐（默认只提示、不动文件）
 FIX=0
 [ "${1:-}" = "--fix" ] && FIX=1
+
+# --rollback：从最近一次备份还原 wechat profile 依赖（--fix 出事时用）
+if [ "${1:-}" = "--rollback" ]; then
+  WP="$HOME/.dsh/profiles/wechat"
+  BK="$HOME/.dsh/backup"
+  A=$(ls -t "$BK"/wechat-deepseek-ai-*.tar.gz 2>/dev/null | head -1)
+  M=$(ls -t "$BK"/wechat-mnemon-*.tar.gz 2>/dev/null | head -1)
+  if [ -z "$A" ] || [ -z "$M" ]; then
+    echo "❌ 没找到备份（$BK/wechat-*.tar.gz）"; exit 1
+  fi
+  echo "从备份还原 wechat 依赖："
+  echo "  $A"
+  echo "  $M"
+  rm -rf "$WP/node_modules/@deepseek-ai"
+  tar xzf "$A" -C "$WP/node_modules"
+  rm -rf "$WP/node_modules/dsh-mnemon"
+  tar xzf "$M" -C "$WP/node_modules"
+  echo "  ✅ 还原完成（@deepseek-ai $(ls "$WP/node_modules/@deepseek-ai" | wc -l) 个包）"
+  echo "  请重启：systemctl --user restart dsh-wechat"
+  exit 0
+fi
 
 echo "──────────────────────────────────────────────"
 echo " dsh 升级后收尾（$(date '+%Y-%m-%d %H:%M')）"
@@ -67,6 +92,9 @@ if [ -d "$WP/node_modules/@deepseek-ai" ]; then
     echo "       cp -r $GLOBAL/node_modules/@deepseek-ai/* $WP/node_modules/@deepseek-ai/"
     echo "     然后重启：sudo systemctl restart dsh-wechat"
     if [ "$FIX" = "1" ]; then
+      echo "     ⚠️ 警告：只有【同时升级 dsh-wechat 插件】时才应执行本步。"
+      echo "        2026-09-10 实测：仅升依赖会让 dsh-wechat 启动失败（ERR_PACKAGE_PATH_NOT_EXPORTED）。"
+      echo "        出事后可一键回滚：bash $0 --rollback"
       echo "     --fix 已启用，开始对齐（原 package.json 会先备份）…"
       cp "$WP/package.json" "$HOME/.dsh/backup/wechat-package.json.bak-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
       mkdir -p "$WP/node_modules/@deepseek-ai"
