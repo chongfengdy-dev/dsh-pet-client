@@ -121,6 +121,12 @@ if [ -d "$WP/node_modules/@deepseek-ai" ]; then
   fi
 fi
 
+# 3.4 纯净模式（dsh-mode.sh --patch 剥离）—— 升级后插件 id 可能改名
+if [ -f "$ROOT/clean.patch.yml" ]; then
+  echo "  ℹ️ 纯净模式靠 clean.patch.yml 里的插件 id 做剥离；dsh 大版本升级后建议切一次"
+  echo "     「纯净模式」验证：若界面没变干净（第三方插件仍在），说明 id 改名了、需更新该文件"
+fi
+
 echo
 echo "[4/4] 重启服务（需要主手动，脚本不代劳）"
 echo "     sudo systemctl restart dsh-web dsh-terminal"
