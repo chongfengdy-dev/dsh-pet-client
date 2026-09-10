@@ -5,12 +5,17 @@
 # 同时少数内部 API 可能改名，配套插件需要复核。2026-09-10 主定。
 #
 # 用法（升级完 dsh 后跑一次即可，幂等、可重复执行）：
-#     bash ~/deepseek-harness/nim-client/post-dsh-upgrade.sh
+#     bash ~/deepseek-harness/nim-client/post-dsh-upgrade.sh          # 只检查 + 重打两处补丁
+#     bash ~/deepseek-harness/nim-client/post-dsh-upgrade.sh --fix    # 额外自动对齐 wechat profile 依赖
 #
 # 需要提权的地方（写全局包）脚本会明确提示，其余都是只读检查。
 set -uo pipefail
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
+
+# --fix：检测到 wechat profile 依赖滞后时自动对齐（默认只提示、不动文件）
+FIX=0
+[ "${1:-}" = "--fix" ] && FIX=1
 
 echo "──────────────────────────────────────────────"
 echo " dsh 升级后收尾（$(date '+%Y-%m-%d %H:%M')）"
@@ -61,6 +66,20 @@ if [ -d "$WP/node_modules/@deepseek-ai" ]; then
     echo "     undefined.filter 等诡异报错，微信通道会坏）："
     echo "       cp -r $GLOBAL/node_modules/@deepseek-ai/* $WP/node_modules/@deepseek-ai/"
     echo "     然后重启：sudo systemctl restart dsh-wechat"
+    if [ "$FIX" = "1" ]; then
+      echo "     --fix 已启用，开始对齐（原 package.json 会先备份）…"
+      cp "$WP/package.json" "$HOME/.dsh/backup/wechat-package.json.bak-$(date +%Y%m%d-%H%M%S)" 2>/dev/null || true
+      mkdir -p "$WP/node_modules/@deepseek-ai"
+      cp -r "$GLOBAL/node_modules/@deepseek-ai/." "$WP/node_modules/@deepseek-ai/" && echo "       ✅ 官方包已同步（$(ls "$WP/node_modules/@deepseek-ai" | wc -l) 个）"
+      WEBM="$HOME/.dsh/profiles/web/node_modules/dsh-mnemon"
+      if [ -d "$WEBM" ]; then
+        rm -rf "$WP/node_modules/dsh-mnemon"
+        cp -r "$WEBM" "$WP/node_modules/dsh-mnemon" && echo "       ✅ dsh-mnemon 已同步为 web profile 的版本"
+      fi
+      echo "       → 请重启：sudo systemctl restart dsh-wechat"
+    else
+      echo "     提示：加 --fix 可自动完成对齐（bash $0 --fix）"
+    fi
   else
     echo "  ✅ wechat profile 本地依赖与全局一致"
   fi
