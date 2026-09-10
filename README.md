@@ -70,6 +70,7 @@ DSH-Pet-Client/
 ├── dsh_client_full.nim   # 客户端主源码（Nim）
 ├── dsh-term-panels/       # dsh web 前端插件（终端面板/HUD/按钮界面/消息大纲/缩放浮标；大纲已合并回内置，2026-09-01 删除独立包）
 ├── dsh-web-token-sync/    # 认证 token 自动同步插件（dsh web 每次启动把最新 token 写入客户端目录，2026-09-05 新增）
+├── dsh-archive-sync/      # 已归档会话「恢复免重启」插件（进程内同步 workspace.json 归档集合，2026-09-10 新增）
 ├── dsh-wechat/            # 微信通道插件（iLink bot <-> agent + 3082 send 服务）
 ├── terminal-server/       # 3081 终端服务（node + node-pty + 词元/提问检测；backgrounds/ 终端背景图）
 ├── deploy.sh              # WSL 一键部署脚本
@@ -124,6 +125,30 @@ nim c --app:gui -d:release --path:"<webui-nim路径>" --path:"<winim路径>" dsh
 dsh web 每次启动生成一次性 token；WSL 侧挂载 `dsh-web-token-sync` 插件后
 会自动把最新 token 写入 exe 同目录 `dsh-web-token.txt`，客户端重开即自动认证，
 **全程无需手动**。未挂插件时才需手动把 web 启动 URL（`.../?token=xxxx`）写入该文件一次。
+
+### 已归档会话恢复免重启（dsh-archive-sync，2026-09-10 新增）
+
+dsh 官方把会话归档设计成**单向**（`dsh-workspace/README`：*Archiving is one-way … no unarchive action exists yet*），
+且归档集合读在内存里 —— 外部修改 `~/.dsh/storages/workspace.json` 必须重启 dsh web 才可见。
+
+本插件在 dsh 进程内轮询该文件，发现归档集合与内存不一致时调用 `workspaceRegistry.setState` 同步
+（持久化与前端推送由 dsh 自己完成）→ **恢复会话瞬间生效、无需重启**。
+
+接线（web profile，装一次即可）：
+
+```bash
+cd ~/.dsh/profiles/web
+# ① package.json：dependencies 加 "dsh-archive-sync": "link:<仓库路径>/dsh-archive-sync"
+#                 dsh.profile.bundles 加 "dsh-archive-sync"
+# ② 建链接（或直接 pnpm install）
+ln -s <仓库路径>/dsh-archive-sync node_modules/dsh-archive-sync
+# ③ 加载一次，此后不再需要重启
+sudo systemctl restart dsh-web
+```
+
+未装该插件时也能恢复（3081 会写回 workspace.json），只是要等一次 dsh web 重启才可见。
+若 dsh 升级后日志出现 `[dsh-archive-sync] workspaceRegistry API 不可用`，说明内部方法改名、需按新版适配
+（插件只记日志，不会影响 dsh 本体）。
 
 ## 版本历史
 
