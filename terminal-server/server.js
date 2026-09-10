@@ -363,7 +363,7 @@ let todayUsageBusy = false;
 function refreshTodayUsage() {
   if (todayUsageBusy) return;
   todayUsageBusy = true;
-  execFile('python3', [path.join(__dirname, 'today-usage.py')], { timeout: 30000 }, (err, stdout) => {
+  execFile('python3', [path.join(__dirname, 'today-usage.py')], { timeout: 120000 }, (err, stdout) => {
     todayUsageBusy = false;
     if (err) return;
     try {

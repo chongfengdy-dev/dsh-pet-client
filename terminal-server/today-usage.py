@@ -21,8 +21,21 @@ def scan():
         if not os.path.isdir(sp):
             continue
         for sid in os.listdir(sp):
-            f = os.path.join(sp, sid, 'session.jsonl.zstd')
-            if not os.path.isfile(f):
+            # 2026-09-10：dsh 0.1.5 起会话日志改名 session.v3.jsonl.zstd（旧名 session.jsonl.zstd），
+            # 两种名字都认（只认旧名会让今日用量恒为 0）。
+            f = None
+            for _fn in ('session.v3.jsonl.zstd', 'session.jsonl.zstd'):
+                _p = os.path.join(sp, sid, _fn)
+                if os.path.isfile(_p):
+                    f = _p
+                    break
+            if f is None:
+                continue
+            try:
+                # 2026-09-10：只解压今天动过的会话（全量 270+ 个文件要 46s，超时被杀）
+                if os.path.getmtime(f) * 1000 < start_ms:
+                    continue
+            except OSError:
                 continue
             try:
                 d = zstandard.ZstdDecompressor()
