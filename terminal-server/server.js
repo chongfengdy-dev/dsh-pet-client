@@ -339,8 +339,12 @@ function latestSessionMtime() {
       const sp = path.join(root, scope);
       if (!fs.statSync(sp).isDirectory()) continue;
       for (const sid of fs.readdirSync(sp)) {
-        const f = path.join(sp, sid, 'session.jsonl.zstd');
-        try { const mt = fs.statSync(f).mtimeMs; if (mt > best) best = mt; } catch (e) {}
+        // 2026-09-10：dsh 0.1.5 起会话日志改名 session.v3.jsonl.zstd（旧名 session.jsonl.zstd）。
+        // 两个名字都试；将来再改名（v4…）在这里加候选即可。
+        for (const name of ['session.v3.jsonl.zstd', 'session.jsonl.zstd']) {
+          const f = path.join(sp, sid, name);
+          try { const mt = fs.statSync(f).mtimeMs; if (mt > best) best = mt; } catch (e) {}
+        }
       }
     }
     return best;

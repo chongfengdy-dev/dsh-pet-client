@@ -147,13 +147,6 @@ window.__ModuleLoader__.load({
 					+ "#" + HUD_ID + ",#" + HUD_ID + " span,#" + HUD_ID + " button{font-family:" + value + " !important}"   // 2026-09-05 HUD（含数字列/终端按钮）字体跟随设置
 				: "";
 		}
-		// 界面字号应用（缩放比例 = 字号/基准14；2026-08-27 主需求）
-		// 2026-09-05 主定：HUD 随字号设置同步缩放（与页面一致，两侧设置相同即一致）
-		function applyUiFontSize(size) {
-			const z = size > 0 ? (size / 14) : 1;
-			document.documentElement.style.zoom = String(Math.round(z * 1000) / 1000);
-		}
-
 		// 终端宿主/状态提升到模块顶层（2026-08-19：版本更新提示的 typeSudoRestart 在 apply 外需访问）
 		const termHost = document.createElement("div");
 		const termState = { term: null, fit: null, ws: null, initStarted: false };
@@ -218,12 +211,11 @@ window.__ModuleLoader__.load({
 			// ---------- 界面字体（系统字库枚举 + 选择即应用；2026-08-27 主需求：放入设置面板）
 			// 2026-09-05 并入 termSettings（服务端持久化，客户端重启可记住） ----------
 			let uiFont = termSettings.uiFont || "";
-			let uiFontSize = termSettings.uiFontSize || 14;
 			let sysFonts = null;   // 系统字体列表（懒加载缓存）
-			// 2026-09-05 服务端恢复后同步设置面板下拉框：通知 uiFont/uiFontSize 变化
+			// 2026-09-05 服务端恢复后同步设置面板下拉框：通知 uiFont 变化
 			const UI_FONT_CHANGE_EVT = "dsh-ui-font-change";
 			function notifyUiFontChange() {
-				try { window.dispatchEvent(new CustomEvent(UI_FONT_CHANGE_EVT, { detail: { uiFont, uiFontSize } })); } catch (e) {}
+				try { window.dispatchEvent(new CustomEvent(UI_FONT_CHANGE_EVT, { detail: { uiFont } })); } catch (e) {}
 			}
 			async function loadSystemFonts() {
 				if (sysFonts) return sysFonts;
@@ -255,10 +247,9 @@ window.__ModuleLoader__.load({
 			function buildSettingsFontEntry() {
 				if (!React || !ctx.slots) return;
 				try {
-					// 字体设置 React 组件（闭包共享 applyUiFont/applyUiFontSize/loadSystemFonts）
+					// 字体设置 React 组件（闭包共享 applyUiFont/loadSystemFonts）
 					function FontSection() {
 						const [font, setFont] = React.useState(uiFont);
-						const [size, setSize] = React.useState(uiFontSize);
 						const [fonts, setFonts] = React.useState([]);
 						React.useEffect(() => { loadSystemFonts().then((f) => setFonts(f)); }, []);
 						// 2026-09-05 服务端恢复后同步下拉框显示（避免显示“系统默认”而实际已应用自定义字体）
@@ -266,7 +257,6 @@ window.__ModuleLoader__.load({
 							const onUiFontChange = (e) => {
 								const d = e.detail || {};
 								if (typeof d.uiFont === "string") setFont(d.uiFont);
-								if (typeof d.uiFontSize === "number") setSize(String(d.uiFontSize));
 							};
 							window.addEventListener(UI_FONT_CHANGE_EVT, onUiFontChange);
 							return () => window.removeEventListener(UI_FONT_CHANGE_EVT, onUiFontChange);
@@ -281,27 +271,13 @@ window.__ModuleLoader__.load({
 						}, React.createElement("option", { value: "" }, "系统默认"),
 							fonts.map((f) => React.createElement("option",
 								{ value: '"' + f + '", sans-serif', style: { fontFamily: '"' + f + '"' } }, f)));
-						// 字号下拉（同字型 UI，2026-08-27 主需求：滑动条不好操作改下拉）
-						const SIZE_OPTS = [12, 13, 14, 15, 16, 17, 18, 19, 20];
-						const range = React.createElement("select", {
-							value: String(size),
-							onChange: (e) => { const v = parseInt(e.target.value, 10); setSize(v); uiFontSize = v;
-								termSettings.uiFontSize = v;
-								applyUiFontSize(v);
-								saveTermSettings(termSettings); },
-							style: { width: "100%", padding: "7px 10px", borderRadius: "8px",
-								border: "1px solid var(--dsw-alias-border-l2)",
-								background: "var(--dsw-alias-bg-layer-2)",
-								color: "var(--dsw-alias-label-primary)", fontSize: "14px" },
-						}, SIZE_OPTS.map((n) => React.createElement("option", { value: String(n) }, n + " px")));
 						const preview = React.createElement("div",
-							{ style: { margin: "1px 0 22px", fontFamily: font || "system-ui, 'Segoe UI', sans-serif", fontSize: size + "px" } },
-							size + ": The quick brown fox jumps over the lazy dog");
+							{ style: { margin: "1px 0 22px", fontFamily: font || "system-ui, 'Segoe UI', sans-serif", fontSize: "14px" } },
+							"The quick brown fox jumps over the lazy dog");
 						const label = (txt) => React.createElement("div",
 							{ style: { fontSize: "13px", color: "var(--dsw-alias-label-secondary)", marginBottom: "8px" } }, txt);
 						const fontGroup = React.createElement("div", { style: { marginBottom: "22px" } }, label("字体"), sel);
-						const sizeGroup = React.createElement("div", null, label("字号"), range);
-						return React.createElement("div", null, fontGroup, preview, sizeGroup);
+						return React.createElement("div", null, fontGroup, preview);
 					}
 					ctx.slots.inject("settings.section", () => {
 						const off = ctx.slots.register({
@@ -559,7 +535,6 @@ window.__ModuleLoader__.load({
 					if (typeof s.bgImageAlpha === "number") termSettings.bgImageAlpha = s.bgImageAlpha;
 					// 2026-09-05 界面字体/字号随服务端恢复（客户端重启可记住）
 					if (typeof s.uiFont === "string") termSettings.uiFont = s.uiFont;
-					if (typeof s.uiFontSize === "number") termSettings.uiFontSize = s.uiFontSize;
 					if (st.geom && st.geom.w >= 320 && st.geom.h >= 200) {
 						const g = st.geom;
 						termPanel.root.style.width = g.w + "px";
@@ -572,9 +547,7 @@ window.__ModuleLoader__.load({
 					syncImgUI();
 					// 服务端权威恢复后，应用界面字体/字号（覆盖 localStorage 初值）
 					uiFont = termSettings.uiFont || "";
-					uiFontSize = termSettings.uiFontSize || 14;
 					if (uiFont) applyUiFont(uiFont);
-					applyUiFontSize(uiFontSize);
 					// 页面缩放由浏览器/WebView 原生记忆（Ctrl+滚轮缩放重开已保留），此处不再用 pageZoom 覆盖 zoom
 					applyTermSettings();
 					notifyUiFontChange();   // 同步设置面板下拉框显示
@@ -664,7 +637,6 @@ window.__ModuleLoader__.load({
 
 			// ---------- 应用界面字体/字号（以服务端 term-state 为权威，客户端重启可记住；fetch 恢复后再覆盖一次） ----------
 			if (uiFont) applyUiFont(uiFont);
-			applyUiFontSize(uiFontSize || 14);
 
 			// ---------- 已归档会话面板（设置按钮上方） ----------
 			buildArchivedPanel(ctx);
@@ -835,7 +807,7 @@ window.__ModuleLoader__.load({
 			// 默认设置（主 2026-08-16 定稿：深色 #0d1117、透明度 60%、字号 16、Consolas）
 			// 2026-09-05 界面字体/字号并入本对象（与服务端持久化同通道，WebView2 localStorage 不可靠）
 			// 页面缩放由浏览器/WebView 原生记忆，不在本对象持久化（已删 pageZoom）
-			let s = { bg: "#0d1117", alpha: 60, fontSize: 16, fontIdx: 0, bgImage: "", bgImageAlpha: 100, uiFont: "", uiFontSize: 14 };
+			let s = { bg: "#0d1117", alpha: 60, fontSize: 16, fontIdx: 0, bgImage: "", bgImageAlpha: 100, uiFont: "" };
 			try {
 				const raw = JSON.parse(localStorage.getItem(TERM_SETTINGS_KEY) || "null");
 				if (raw) {
@@ -846,7 +818,6 @@ window.__ModuleLoader__.load({
 					if (typeof raw.bgImage === "string") s.bgImage = raw.bgImage;
 					if (typeof raw.bgImageAlpha === "number") s.bgImageAlpha = raw.bgImageAlpha;
 					if (typeof raw.uiFont === "string") s.uiFont = raw.uiFont;
-					if (typeof raw.uiFontSize === "number") s.uiFontSize = raw.uiFontSize;
 				}
 			} catch (e) {}
 			return s;

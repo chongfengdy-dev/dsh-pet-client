@@ -23,13 +23,15 @@ def latest_session_file():
         if not os.path.isdir(sp):
             continue
         for sid in os.listdir(sp):
-            f = os.path.join(sp, sid, 'session.jsonl.zstd')
-            if not os.path.isfile(f):
-                continue
-            mt = os.path.getmtime(f)
-            if mt > best_mt:
-                best_mt = mt
-                best = f
+            # 2026-09-10：dsh 0.1.5 起日志改名 session.v3.jsonl.zstd；两种名字都认。
+            for fn in ('session.v3.jsonl.zstd', 'session.jsonl.zstd'):
+                f = os.path.join(sp, sid, fn)
+                if not os.path.isfile(f):
+                    continue
+                mt = os.path.getmtime(f)
+                if mt > best_mt:
+                    best_mt = mt
+                    best = f
     return best
 
 def main():

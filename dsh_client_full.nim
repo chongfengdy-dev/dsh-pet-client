@@ -179,36 +179,63 @@ proc showTrayMenu(hwnd: HWND) =
 # term-panels 每 1.5s 把页面标题固定为 "DeepSeek Harness"（PWA 独立窗口与浏览器
 # 标签的窗口标题都稳定为该值），本壳据此枚举找 dsh 对话窗口做切换。
 var gFoundDshHwnd: HWND
+var gFallbackDshHwnd: HWND    # 标题命中的非 PWA 窗口(浏览器标签等)，无 PWA 时兜底
+var gOmniHit: bool            # 子窗口枚举是否发现地址栏控件
 var gDshLaunchTick: int64 = 0  # 最近一次拉起 PWA 的时刻（防 2s 内重复点击重复开窗）
 var gSingleMutex: HANDLE = 0  # 单实例互斥句柄（运行期保持，退出时释放）
 var gActivateEvent: HANDLE = 0 # 激活事件句柄（新实例 SetEvent 触发本实例呼出）
 
+proc omniWndProc(hwnd: HWND, lParam: LPARAM): WINBOOL {.stdcall.} =
+  ## 递归枚举子窗口，找类名含 "omnibox" 的地址栏控件。
+  var cls: array[128, WCHAR]
+  let n = GetClassNameW(hwnd, cast[LPWSTR](cls.addr), 128)
+  if n > 0:
+    var s = newString(int(n))
+    for i in 0 ..< int(n): s[i] = char(cls[i])
+    if s.toLowerAscii().contains("omnibox"):
+      gOmniHit = true
+      return FALSE
+  return TRUE
+
+proc isPwaWindow(hwnd: HWND): bool =
+  ## PWA 独立应用窗口没有地址栏；普通浏览器窗口有 Chrome_OmniboxView。
+  ## 2026-09-10 主需求：浏览器标签与 PWA 独立窗口标题同为 "DeepSeek Harness"，
+  ## 靠地址栏有无把两者区分开，优先跟随 PWA（否则最小化 PWA 时鲸鱼不变黑）。
+  gOmniHit = false
+  discard EnumChildWindows(hwnd, omniWndProc, LPARAM(0))
+  result = not gOmniHit
+
+proc hasHarness(title: openArray[WCHAR], tn: int): bool =
+  ## 大小写不敏感匹配品牌词 "harness"（纯净模式官方页面标题形如
+  ## "deepseek harness -<会话>——deepseekharness" 全小写/连写；term-panels
+  ## 固定版为 "DeepSeek Harness" 大写）。只匹配 dsh 页面，DeepSeek 官网不误命中。
+  const marker = "harness"             # 7 字符全小写
+  for i in 0 .. tn - 7:
+    var m = true
+    for j in 0 ..< 7:
+      var ch = int(title[i + j])
+      if ch > 127: m = false; break    # 非 ASCII 字符直接失败（防中文低位误匹配）
+      if ch >= 65 and ch <= 90: ch += 32   # A-Z → a-z
+      if ch != ord(marker[j]): m = false; break
+    if m: return true
+  return false
+
 proc findDshWndProc(hwnd: HWND, lParam: LPARAM): WINBOOL {.stdcall.} =
-  # 大小写不敏感匹配品牌词 "deepseek"（主实测纯净模式官方页面标题形如
-  # "deepseek harness -<会话>——deepseekharness" 全小写/连写变体；term-panels
-  # 固定版为 "DeepSeek Harness" 大写），统一 ASCII 小写后查子串——两模式都能
-  # 命中 dsh 对话窗口，避免每点一次找不到窗口重复开新 PWA 窗口
   var title: array[256, WCHAR]
   let tn = GetWindowTextW(hwnd, cast[LPWSTR](title.addr), 256)
-  if tn >= 7:
-    const marker = "harness"           # 7 字符全小写；只匹配 dsh 页面(含 Harness)，
-                                       # DeepSeek 官网等非 dsh 页面(仅 DeepSeek)不会误命中
-    for i in 0 .. tn - 7:
-      var m = true
-      for j in 0 ..< 7:
-        var ch = int(title[i + j])
-        if ch > 127: m = false; break   # 非 ASCII 字符直接失败（防中文低位误匹配）
-        if ch >= 65 and ch <= 90: ch += 32   # A-Z → a-z
-        if ch != ord(marker[j]): m = false; break
-      if m:
-        gFoundDshHwnd = hwnd
-        return FALSE
+  if tn >= 7 and hasHarness(title, int(tn)):
+    if isPwaWindow(hwnd):
+      gFoundDshHwnd = hwnd        # 最高优先级：PWA 独立窗口，立即停止枚举
+      return FALSE
+    elif gFallbackDshHwnd == 0:
+      gFallbackDshHwnd = hwnd     # 浏览器标签先记下，继续找有没有 PWA 窗口
   return TRUE
 
 proc findDshWindow(): HWND =
   gFoundDshHwnd = 0
+  gFallbackDshHwnd = 0
   discard EnumWindows(findDshWndProc, LPARAM(0))
-  result = gFoundDshHwnd
+  result = if gFoundDshHwnd != 0: gFoundDshHwnd else: gFallbackDshHwnd
 
 proc findPwaShortcut(): string =
   ## 开始菜单递归找已安装的 PWA 快捷方式（文件名含 "DeepSeek Harness" 的 .lnk）。
