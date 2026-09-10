@@ -55,6 +55,10 @@ done
 if [ -d "$EXEDIR/assets" ]; then cp -r "$EXEDIR/assets" "$PKG/DSH-Pet-Client/"; fi
 if [ -f "$ROOT/使用说明.txt" ]; then cp "$ROOT/使用说明.txt" "$PKG/DSH-Pet-Client/使用说明.txt"; fi
 
+# 防御性剔除：本机私有资源（终端背景图等），即使将来 .gitignore 变动也不进包
+rm -rf "$PKG/terminal-server/backgrounds"
+echo "    (已剔除 terminal-server/backgrounds 私有背景图)"
+
 echo "[4/5] 敏感内容扫描"
 python3 - "$PKG" <<'PY'
 import os, re, sys
