@@ -1,4 +1,4 @@
-# DSH Pet Client v2.2.0
+# DSH Pet Client v2.2.1
 
 DeepSeek Harness 的 Windows 桌面客户端——**浏览器化架构**：对话界面走默认浏览器（127.0.0.1:3080），壳层保留悬浮鲸鱼 + 托盘 + Token HUD + 终端面板 + 微信通道。
 
