@@ -73,7 +73,8 @@ DSH-Pet-Client/
 ├── dsh-wechat/            # 微信通道插件（iLink bot <-> agent + 3082 send 服务）
 ├── terminal-server/       # 3081 终端服务（node + node-pty + 词元/提问检测；backgrounds/ 终端背景图）
 ├── deploy.sh              # WSL 一键部署脚本
-├── assets/                # 鲸鱼素材（四色 bin/ico + 托盘图标）
+├── assets/                # 鲸鱼素材（四色 fish_*.bin/.ico + favicon svg）
+├── 使用说明.md            # 面向使用者的说明文档（随发布包分发）
 └── README.md
 ```
 
@@ -96,10 +97,10 @@ bash deploy.sh
 
 ## 编译
 
-依赖 Nim（2.x）+ MinGW-w64 + [nim-webui](https://github.com/webui-dev/nim-webui) + [winim](https://github.com/khchen/winim)：
+依赖 Nim（2.x）+ MinGW-w64 + [winim](https://github.com/khchen/winim)（**v2.2 浏览器化后不再需要 nim-webui**）：
 
 ```bat
-nim c --app:gui -d:release --path:"<webui-nim路径>" --path:"<winim路径>" dsh_client_full.nim
+nim c --app:gui -d:release --path:"<winim路径>" dsh_client_full.nim
 ```
 
 编译要点：
@@ -168,6 +169,8 @@ sudo systemctl restart dsh-web
 | v1.0.0（GitHub Release）| 托盘 + 悬浮鲸鱼宠物 + 自动重建（闪退修复 v15）|
 
 ## 踩过的坑（给贡献者）
+
+> ⚠️ 第 1–2 条与第 6 条属 **v2.1.x 窗口版（WebView2）** 的历史经验，v2.2 浏览器化后已不适用，仅作备查。
 
 1. **窗口 15 秒自动关闭**：外部页面无 webui.js 连接 → 超时判"未连接"关窗，**必须 `setTimeout(0)`**。
 2. **窗口异常消失/闪退**：对 webui 窗口的任何挂钩都会干扰初始化，**保持无挂钩** + 轮询重建。
