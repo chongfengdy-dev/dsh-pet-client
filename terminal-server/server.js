@@ -187,10 +187,26 @@ app.post('/api/pet-ack', (req, res) => {
 // 仅允许安全字符（防路径穿越），路径限定 sessions 根内。
 const SESSIONS_ROOT = path.join(os.homedir(), '.dsh', 'sessions');
 const WORKSPACE_STATE_FILE = path.join(os.homedir(), '.dsh', 'storages', 'workspace.json');
+// 删除挂起清单：记录"目录已删、但归档墓碑还没结算"的会话。
+// 前端读它做即时过滤；dsh-archive-sync 在 dsh 下次启动时结算并清空。
+const PENDING_DELETES_FILE = path.join(os.homedir(), '.dsh', 'storages', 'dsh-pending-deletes.json');
 const SESSION_ID_RE = /^session-[a-zA-Z0-9_-]{1,64}$/;
 function normalizeSessionId(sessionId) {
   if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) return null;
   return sessionId;
+}
+function readPendingDeletes() {
+  try {
+    const j = JSON.parse(fs.readFileSync(PENDING_DELETES_FILE, 'utf8'));
+    return Array.isArray(j && j.ids) ? j.ids.filter((x) => typeof x === 'string') : [];
+  } catch (e) { return []; }
+}
+function addPendingDelete(sessionId) {
+  const ids = readPendingDeletes();
+  if (ids.includes(sessionId)) return;
+  const tmp = PENDING_DELETES_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify({ ids: [...ids, sessionId] }, null, 2), 'utf8');
+  fs.renameSync(tmp, PENDING_DELETES_FILE);
 }
 function findSessionDir(fullId) {
   let entries = [];
@@ -204,6 +220,10 @@ function findSessionDir(fullId) {
   }
   return null;
 }
+// 前端（已归档面板）查询：这些会话已删除，刷新页面后也不要再显示
+app.get('/api/session-pending-deletes', (req, res) => {
+  res.json({ ids: readPendingDeletes() });
+});
 app.post('/api/session-delete', (req, res) => {
   const fullId = normalizeSessionId(req.body && req.body.sessionId);
   if (!fullId) return res.status(400).json({ error: 'invalid session id' });
@@ -214,22 +234,57 @@ app.post('/api/session-delete', (req, res) => {
   if (!targetReal.startsWith(rootReal + path.sep)) {
     return res.status(403).json({ error: 'path outside sessions root' });
   }
-  fs.rmSync(targetReal, { recursive: true, force: true });
-  console.log('[session-delete] removed', targetReal);
-  // 同步清理归档集合残留（host 重启后加载干净状态；2026-08-27）
+  // 2026-09-11 方案（主定）：
+  //   1) 立刻隐藏：ID 写进归档集合 archivedSessionIds（durable 显示过滤，工作区立即不显示）
+  //   2) 记录删除挂起清单（前端过滤 + 重启结算的依据）
+  //   3) 真实删除：目录/投影缓存立即删；归档集合里那条"墓碑"由 dsh-archive-sync
+  //      在 dsh 下次启动时结算掉（运行中清理会让会话又冒回工作区，见插件注释）
   try {
     const raw = fs.readFileSync(WORKSPACE_STATE_FILE, 'utf8');
     const state = JSON.parse(raw);
+    let changed = false;
     const arr = state.global && state.global.archivedSessionIds;
-    if (Array.isArray(arr) && arr.includes(fullId)) {
-      state.global.archivedSessionIds = arr.filter((id) => id !== fullId);
+    if (Array.isArray(arr) && !arr.includes(fullId)) {
+      state.global.archivedSessionIds = [...arr, fullId];
+      changed = true;
+      console.log('[session-delete] hidden via archive-set', fullId);
+    }
+    // 兜底：顺带把 sessionIds 里的引用去掉（dsh 可能稍后按索引写回，无害）
+    const workspaces = (state.tables && state.tables.workspaces) || {};
+    for (const wsId of Object.keys(workspaces)) {
+      const ws = workspaces[wsId];
+      if (ws && Array.isArray(ws.sessionIds) && ws.sessionIds.includes(fullId)) {
+        ws.sessionIds = ws.sessionIds.filter((id) => id !== fullId);
+        changed = true;
+        console.log('[session-delete] workspace sessionIds cleaned', wsId, fullId);
+      }
+    }
+    if (changed) {
       const tmp = WORKSPACE_STATE_FILE + '.tmp';
       fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
       fs.renameSync(tmp, WORKSPACE_STATE_FILE);
-      console.log('[session-delete] archive-set cleaned', fullId);
     }
-  } catch (e) { console.log('[session-delete] archive-set cleanup failed:', e.message); }
+  } catch (e) { console.log('[session-delete] state cleanup failed:', e.message); }
+
+  try {
+    addPendingDelete(fullId);
+    console.log('[session-delete] pending-delete recorded', fullId);
+  } catch (e) { console.log('[session-delete] pending-delete record failed:', e.message); }
+
+  fs.rmSync(targetReal, { recursive: true, force: true });
+  console.log('[session-delete] removed', targetReal);
+
+  // 投影缓存也清（否则列表可能从缓存重建）
+  try {
+    const pcFile = path.join(os.homedir(), '.dsh', 'storages', 'session_projcache', 'sessions', fullId + '.json');
+    if (fs.existsSync(pcFile)) {
+      fs.rmSync(pcFile, { force: true });
+      console.log('[session-delete] projcache removed', fullId);
+    }
+  } catch (e) { console.log('[session-delete] projcache cleanup failed:', e.message); }
+
   res.json({ ok: true });
+  // 不重启 dsh web：隐藏由归档集合（插件同步）+ 下次重启时插件结算完成。
 });
 app.post('/api/session-unarchive', (req, res) => {
   const fullId = normalizeSessionId(req.body && req.body.sessionId);

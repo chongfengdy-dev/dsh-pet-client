@@ -1,6 +1,6 @@
 window.__ModuleLoader__.load({
 	id: "dsh-term-panels",
-	// @@BIKINI_VERSION_MARK@@ v20260905-2250 (页面缩放持久化+终端字体修复)
+	// @@BIKINI_VERSION_MARK@@ v20260911-2030 (移除缩放浮标)
 	factory: (require) => {
 		var module = { exports: {} };
 		var exports = module.exports;
@@ -632,9 +632,6 @@ window.__ModuleLoader__.load({
 			termBtnRow.appendChild(btnOpenTerm);
 			hud.root.appendChild(termBtnRow);
 
-			// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时屏幕中央提示） ----------
-			buildZoomHud();
-
 			// ---------- 应用界面字体/字号（以服务端 term-state 为权威，客户端重启可记住；fetch 恢复后再覆盖一次） ----------
 			if (uiFont) applyUiFont(uiFont);
 
@@ -972,52 +969,6 @@ window.__ModuleLoader__.load({
 					mode: "cors",
 				}).catch(() => {});
 			} catch (e) {}
-		}
-
-		// ---------- 缩放比例浮标（Ctrl+滚轮/键盘缩放时屏幕中央显示） ----------
-		// WebView2 浏览器缩放（Ctrl+滚轮 / Ctrl+± / Ctrl+0）会改变 window.devicePixelRatio
-		// （= 系统 DPI 缩放 × 页面缩放）。记录加载时 DPR 为基准，缩放后相除即得当前比例。
-		// 屏幕中央、半透明背景、字体 18px、只显示数字；1.5s 后自动隐藏。
-		function buildZoomHud() {
-			const el = document.createElement("div");
-			el.id = "dsh-zoom-hud";
-			Object.assign(el.style, {
-				position: "fixed", left: "50%", top: "50%",
-				transform: "translate(-50%, -50%)", zIndex: "99999",
-				padding: "10px 22px", borderRadius: "12px",
-				background: "color-mix(in srgb, var(--dsw-alias-bg-layer-2) 30%, transparent)",
-				border: "1px solid var(--dsw-alias-border-l2)",
-				boxShadow: "0 4px 16px rgba(0,0,0,.22)",
-				backdropFilter: "blur(4px)",
-				color: "var(--dsw-alias-label-primary)",
-				fontFamily: 'system-ui, "Segoe UI", sans-serif',
-				fontSize: "18px", fontWeight: "600",
-				display: "none",
-				pointerEvents: "none",
-				userSelect: "none",
-			});
-			document.body.appendChild(el);
-			let hideTimer = null;
-			let readTimer = null;
-			function show() {
-				el.style.display = "";
-				el.textContent = "…";
-				clearTimeout(hideTimer);
-				clearTimeout(readTimer);
-				// 等页面缩放生效后再读百分比（wheel 事件时缩放尚未应用）
-				// 2026-09-05 用 outerWidth/innerWidth 读纯网页缩放（排除系统 DPI；devicePixelRatio 混入系统缩放会不准）
-				readTimer = setTimeout(() => {
-					const zoom = Math.round((window.outerWidth / window.innerWidth) * 100);
-					el.textContent = zoom + "%";
-				}, 120);
-				hideTimer = setTimeout(() => { el.style.display = "none"; }, 1500);
-			}
-			document.addEventListener("wheel", (e) => {
-				if (e.ctrlKey) show();
-			}, { passive: true });
-			document.addEventListener("keydown", (e) => {
-				if (e.ctrlKey && (e.key === "+" || e.key === "=" || e.key === "-" || e.key === "0")) show();
-			});
 		}
 
 		// 大纲锁定计数：菜单/设置面板打开时禁止消息大纲 hover 展开，并整体隐藏横杠（2026-08-27 用户需求）
@@ -1426,6 +1377,17 @@ window.__ModuleLoader__.load({
 			// 订阅归档集合与会话数据变化
 			try { if (sessions.list && sessions.list.subscribe) sessions.list.subscribe(render); } catch (e) {}
 			try { if (workspaces.list && workspaces.list.subscribe) workspaces.list.subscribe(render); } catch (e) {}
+			// 已删除会话：目录已删但 dsh 内存还留着（重启才结算），刷新页面后会"复活"。
+			// 向终端服务拉一次挂起删除清单，永久过滤掉（2026-09-11 用户需求）。
+			fetch("http://127.0.0.1:3081/api/session-pending-deletes")
+				.then((r) => r.json())
+				.then((j) => {
+					if (j && Array.isArray(j.ids) && j.ids.length) {
+						j.ids.forEach((id) => removedIds.add(id));
+						render();
+					}
+				})
+				.catch(() => {});
 
 			// 挂载：插到设置按钮上方（footArea 内 settingsArea 之前）
 			function findSettingsBtn() {
