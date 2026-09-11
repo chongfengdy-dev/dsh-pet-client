@@ -7,8 +7,9 @@
 #      terminal-server/backgrounds/（本机终端背景图，510KB）、*.log、*.exe 等。
 #      不要再用 rsync 整目录 —— rsync 不认 .gitignore，会把上面这些搬进包。
 #   2. 显式补充 "被 gitignore 但发布必需" 的文件（dsh-web.service）。
-#   3. Windows 侧产物（exe + DLL + assets + 使用说明）从 exe 所在目录单独取。
+#   3. Windows 侧产物（exe + DLL + assets + 使用说明.md）从 exe 所在目录单独取。
 #   4. 打包前跑敏感串扫描，命中即中止、不产出 zip。
+#   5. **说明文档格式（2026-09-11 主定）：包内所有说明文档一律 .md，不再用 .txt。**
 #
 # 用法: ./pack-share.sh <版本号> <exe路径> [输出目录]
 #   例: ./pack-share.sh v2.2.0 ~/Desktop/DSH-Pet-Client/dsh_client_full.exe
@@ -53,7 +54,7 @@ for dll in "$EXEDIR"/*.dll; do
   [ -e "$dll" ] && cp "$dll" "$PKG/DSH-Pet-Client/"
 done
 if [ -d "$EXEDIR/assets" ]; then cp -r "$EXEDIR/assets" "$PKG/DSH-Pet-Client/"; fi
-if [ -f "$ROOT/使用说明.txt" ]; then cp "$ROOT/使用说明.txt" "$PKG/DSH-Pet-Client/使用说明.txt"; fi
+if [ -f "$ROOT/使用说明.md" ]; then cp "$ROOT/使用说明.md" "$PKG/DSH-Pet-Client/使用说明.md"; fi
 
 # 防御性剔除：本机私有资源（终端背景图等），即使将来 .gitignore 变动也不进包
 rm -rf "$PKG/terminal-server/backgrounds"
