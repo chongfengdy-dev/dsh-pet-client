@@ -152,7 +152,10 @@ sudo systemctl restart dsh-web
 
 | 版本 | 内容 |
 |---|---|
-| v2.2.1（当前）| **归档会话删除即时生效**（不用重启 dsh web）：3081 删除会话时写「挂起清单」`~/.dsh/storages/dsh-pending-deletes.json` 并清投影缓存，新增 `GET /api/session-pending-deletes`；前端已归档面板启动时拉取该清单做永久过滤，刷新页面后已删会话不再「复活」；`dsh-archive-sync` 在 dsh 启动时结算墓碑/孤儿归档项。**移除页面缩放浮标**（浏览器自带缩放已足够：删 `buildZoomHud` 及 Ctrl+滚轮 / `+` / `-` / `0` 监听，README 功能列表与快捷键表同步）。均为前端/3081/插件改动——**刷新页面即生效，exe 无需重编译** |
+| v2.2.1（当前）| - **归档会话删除即时生效**（不用重启 dsh web）：3081 删除会话时写「挂起清单」`~/.dsh/storages/dsh-pending-deletes.json` 并清投影缓存，新增 `GET /api/session-pending-deletes`；
+- 前端已归档面板启动时拉取该清单做永久过滤，刷新页面后已删会话不再「复活」；
+- `dsh-archive-sync` 在 dsh 启动时结算墓碑/孤儿归档项。
+- **移除页面缩放浮标**（浏览器自带缩放已足够：删 `buildZoomHud` 及 Ctrl+滚轮 / `+` / `-` / `0` 监听，README 功能列表与快捷键表同步）。均为前端/3081/插件改动——**刷新页面即生效，exe 无需重编译** |
 | v2.2.0 | **浏览器化架构**：去掉 WebView2 独立窗口，对话界面走浏览器/PWA（127.0.0.1:3080）——闪退/401/token 交换/窗口重建/导航刷新等壳层问题随窗口消除；exe 瘦身 ~360KB（删 webui 窗口/token 交换/L 手势监控/尺寸记忆/窗口置前回执/页内鼠标手势）+ **黑鲸图标统一**（PWA favicon 与 exe/托盘同素材）；**鲸鱼四色**：基态跟随对话窗口（可见=蓝 / 收起=黑）、提问审批=橙心跳、回复完成=绿常亮（窗口置前即停）；同标题多窗口时**优先跟随 PWA**（按有无地址栏区分）；启动自动拉起 PWA、单实例互斥、托盘退出一并关窗；**适配 dsh 0.1.5-rc.1**：会话日志改名 session.v3.jsonl.zstd（terminal-server 与 ask-pending.py 同时认新旧名，否则橙/绿信号失效）；**界面字号交回官方设置**（移除插件自带缩放，保留界面字体选择）；纯净/完整切换保留托盘「复制指令」兜底；保留窗口版走 v2.1.x 线 |
 | v2.1.6 | 纯净 dsh 模式（托盘「打开 DSH（纯净模式）」一键切换，--patch 剥离第三方插件仅保留官方 base+web-app + token-sync；网页/客户端原版样、鲸鱼仍在、第三方元素全无；插件崩时不用备份/恢复 ~/.dsh）+ 托盘两入口改名（完整版/纯净模式）点击复制切换指令到剪贴板 + 401 根治（waitTokenStable 轮询等服务端新 token 稳定再导航；dsh-mode.sh 改 stop→等端口释放→start 避免多重启）+ HUD 字号 13px + dsh-term-panels 持久化修复（_serverSettingsCache 缓存/设置面板 UI 同步/页面缩放外接）+ dsh-web-token-sync 补 dsh.bundle 声明 + dsh-message-outline 弃用删除 |
 | v2.1.5 | 适配 dsh 0.1.2-rc.1：① web 强制认证（客户端 token 自动引导 + dsh-web-token-sync 插件自动同步 + 托盘「浏览器打开原版」后备入口）；② 左缘大纲改官方同源 turnOutline 投影数据（新架构兼容，全量显示；官方历史分页缺陷待修）；③ 终端入口收进 Token HUD 底部按钮；④ HUD 180px/数据对齐/金额一位小数/字体跟随设置；⑤ 界面字号字体存服务端（跨重启记忆、浏览器/客户端共享）；⑥ 终端字体库扩充（霞鹜文楷等宽/Fira Code）并独立于界面字体 |
