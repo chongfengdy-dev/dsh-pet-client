@@ -394,7 +394,7 @@ var
   gMouseInside = false      # 鼠标是否在窗口内
   gMouseX = FLOAT_W / 2.0   # 鼠标位置（窗口内）
   gMouseY = FLOAT_H / 2.0
-  gBubbleTimer = 0          # 泡泡生成计时
+  gBubbleAccum = 0.0        # 泡泡生成累积（秒；事件驱动，每 200ms 一个）
   gBubbles: array[MAX_BUBBLES, Bubble]
   # ---- v7 像素级渲染（UpdateLayeredWindow，无品红） ----
   # 四色鲸鱼像素：[0]=蓝（窗口打开） [1]=黑（窗口最小化） [2]=橙（提问/授权） [3]=绿（回复完成）
@@ -471,16 +471,16 @@ proc floatSpawnBubble() =
       gBubbles[i].x = gFishX - float(FISH_BIN_W div 3) + float(rand(14) - 7)
       gBubbles[i].y = gFishY + float(rand(8) - 4)
       gBubbles[i].r = 2.0 + float(rand(5)) / 2.0
-      gBubbles[i].speed = 0.8 + float(rand(5)) / 3.0
+      gBubbles[i].speed = 100.0    # 上升速度 px/秒（2026-09-28 主定；原为按帧的 0.8~2.4）
       gBubbles[i].life = 1.0
       break
 
-proc floatUpdateBubbles() =
-  ## 更新泡泡：上升 + 消散
+proc floatUpdateBubbles(dt: float) =
+  ## 更新泡泡：上升 + 消散（2026-09-28 改事件/时间驱动：按真实 dt 推进，与帧率无关）
   for i in 0 ..< MAX_BUBBLES:
     if gBubbles[i].active:
-      gBubbles[i].y -= gBubbles[i].speed
-      gBubbles[i].life -= 0.03
+      gBubbles[i].y -= gBubbles[i].speed * dt   # speed 单位 px/秒
+      gBubbles[i].life -= dt / 0.5              # 寿命 500ms（主定）
       if gBubbles[i].life <= 0:
         gBubbles[i].active = false
 
@@ -589,12 +589,12 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
     let k = 1.0 - exp(-5.0 * dt)              # 2026-09-28 主定 λ=5.0（时间常数 0.2s；8.0 略紧、5.0 更柔和）
     gFishX += (targetX - gFishX) * k
     gFishY += (targetY - gFishY) * k
-    # 3. 吐泡泡（每约 500ms 一个）
-    inc gBubbleTimer
-    if gBubbleTimer >= 10:
-      gBubbleTimer = 0
+    # 3. 吐泡泡（2026-09-28 改事件/时间驱动：每 200ms 一个，与帧率无关）
+    gBubbleAccum += dt
+    if gBubbleAccum >= 0.2:
+      gBubbleAccum -= 0.2
       floatSpawnBubble()
-    floatUpdateBubbles()
+    floatUpdateBubbles(dt)
     # 4. 重绘（v7: UpdateLayeredWindow 不能从 WM_PAINT 调用，故在定时器里直接渲染）
     floatPaint(hwnd)
     result = 0
