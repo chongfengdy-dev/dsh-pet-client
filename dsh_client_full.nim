@@ -387,8 +387,6 @@ var
   gFloatDragStart: POINT
   gFloatWinStart: POINT
   gFloatClicked = false
-  gFloatAngle = 0.0         # 鲸鱼游动角度
-  gFloatOrbitR = 120.0      # 绕圈轨道半径（FLOAT_AREA 内留边距）
   gFishX = FLOAT_W / 2.0    # 鲸鱼当前位置（窗口内，初始=放置位置）
   gFishY = FLOAT_H / 2.0
   gMouseInside = false      # 鼠标是否在窗口内
@@ -571,12 +569,10 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
         targetX = gMouseX
         targetY = gMouseY
     else:
-      # 默认绕圈游动
-      gFloatAngle += 0.015
-      if gFloatAngle > 6.283185307:
-        gFloatAngle = 0.0
-      targetX = cx + gFloatOrbitR * cos(gFloatAngle)
-      targetY = cy + gFloatOrbitR * 0.6 * sin(gFloatAngle)
+      # 2026-09-28 主定：默认**静止**（原为绕圈游动，主反馈「画圈的游动碍眼」）。
+      # 吐泡泡、鼠标接近游向鼠标、拖动等其余动画保持不变。
+      targetX = gFishX
+      targetY = gFishY
     # 2. 平滑移动鲸鱼
     gFishX += (targetX - gFishX) * 0.045
     gFishY += (targetY - gFishY) * 0.045
@@ -809,6 +805,9 @@ when isMainModule:
 
   # v2.2 用户需求：启动即自动拉起 PWA 对话窗口（出现鲸鱼 + 打开对话，等效旧版开机开窗；
   # 窗口已在则不重复开）。无 PWA 回落默认浏览器打开 3080。
+  # 注：v2.2.2 曾加「启动自唤醒 WSL + 等待就绪」，经主实测判定鸡肋（唤醒与
+  # wsl-autostart.vbs 重复、等待期用户一点开就失效），2026-09-28 按主决定**整段移除**；
+  # WSL 与三服务由 HKCU Run 的 wsl-autostart.vbs + WSL 内 systemd 负责拉起。
   toggleDshApp()
 
   # 主循环：Win32 消息泵（托盘/宠物）+ 宠物状态轮询（纯文件 I/O，零网络）
