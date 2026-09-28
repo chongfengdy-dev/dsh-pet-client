@@ -22,8 +22,7 @@ const
   WebUrl = "http://127.0.0.1:3080"
   WebTokenFile = "dsh-web-token.txt"   # 认证引导 token 文件（exe 同目录；PWA/标签首次打开带 token 种 cookie）
   AppId = "dsh_nim_client"
-  FLOAT_ANIM_MS = 16        # 悬浮动画帧间隔（60fps 定稿；实测 60fps 开宠物稳定——降频无关，
-                            # 稳定关键是无窗口挂钩，见主循环注释）
+  FLOAT_ANIM_MS = 12        # 悬浮动画帧间隔（2026-09-28 主定 80fps；12.5ms 不可整除，取 12ms≈83fps）
   # 托盘自定义消息
   WM_TRAYICON = WM_APP + 1
   ID_TRAY_OPENWEB = 1       # 打开 DSH（独立窗口/PWA）
@@ -388,7 +387,7 @@ var
   gFloatWinStart: POINT
   gFloatClicked = false
   gFloatAngle = 0.0         # 鲸鱼游动角度（小幅绕圈）
-  gFloatOrbitR = 50.0       # 绕圈轨道**横向**半径（纵向取 0.5 → 25px）：2026-09-28 主定 120→50
+  gFloatOrbitR = 50.0       # 绕圈轨道半径（纵横均 50px）：2026-09-28 主定 120→50
   gLastAnimTick: int64 = 0  # 上一动画帧时间戳（ms；时间驱动，消除帧间隔漂移造成的抖动）
   gFishX = FLOAT_W / 2.0    # 鲸鱼当前位置（窗口内，初始=放置位置）
   gFishY = FLOAT_H / 2.0
@@ -468,8 +467,8 @@ proc floatSpawnBubble() =
   for i in 0 ..< MAX_BUBBLES:
     if not gBubbles[i].active:
       gBubbles[i].active = true
-      # 起点从图标中心**左移 1/4 图标宽**（2026-09-28 主定：原先从正中冒出，看着像在流泪）
-      gBubbles[i].x = gFishX - float(FISH_BIN_W div 4) + float(rand(14) - 7)
+      # 起点从图标中心**左移 1/3 图标宽**（2026-09-28 主定：原先从正中冒出，看着像在流泪）
+      gBubbles[i].x = gFishX - float(FISH_BIN_W div 3) + float(rand(14) - 7)
       gBubbles[i].y = gFishY + float(rand(8) - 4)
       gBubbles[i].r = 2.0 + float(rand(5)) / 2.0
       gBubbles[i].speed = 0.8 + float(rand(5)) / 3.0
@@ -581,14 +580,13 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
     else:
       # 默认小幅绕圈游动（2026-09-28 主定：横向 50 / 纵向 25）。吐泡泡、鼠标接近
       # 游向鼠标、拖动等其余动画保持不变。
-      gFloatAngle += 0.3927 * dt              # 弧度/秒；2026-09-28 主定一圈 16 秒（2π/16 ≈ 0.3927）
+      gFloatAngle += 0.6283 * dt              # 弧度/秒；2026-09-28 主定一圈 10 秒（2π/10 ≈ 0.6283）
       if gFloatAngle > 6.283185307:
         gFloatAngle = 0.0
       targetX = cx + gFloatOrbitR * cos(gFloatAngle)
-      targetY = cy + gFloatOrbitR * 0.5 * sin(gFloatAngle)   # 纵向 25px（主定 50/25）
+      targetY = cy + gFloatOrbitR * sin(gFloatAngle)        # 纵横均 50px（主定）
     # 2. 平滑移动鲸鱼（按实际帧间隔推进，帧率波动不影响观感）
-    let k = 1.0 - exp(-8.0 * dt)              # 2026-09-28 主定：λ 2.9→8.0（时间常数 0.34s→0.13s），
-                                              # 跟得更紧 → 轨迹更贴近理想圆周、观感更稳
+    let k = 1.0 - exp(-5.0 * dt)              # 2026-09-28 主定 λ=5.0（时间常数 0.2s；8.0 略紧、5.0 更柔和）
     gFishX += (targetX - gFishX) * k
     gFishY += (targetY - gFishY) * k
     # 3. 吐泡泡（每约 500ms 一个）
