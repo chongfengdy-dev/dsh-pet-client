@@ -389,6 +389,7 @@ var
   gFloatClicked = false
   gFloatAngle = 0.0         # 鲸鱼游动角度（小幅绕圈）
   gFloatOrbitR = 50.0       # 绕圈轨道**横向**半径（纵向取 0.5 → 25px）：2026-09-28 主定 120→50
+  gLastAnimTick: int64 = 0  # 上一动画帧时间戳（ms；时间驱动，消除帧间隔漂移造成的抖动）
   gFishX = FLOAT_W / 2.0    # 鲸鱼当前位置（窗口内，初始=放置位置）
   gFishY = FLOAT_H / 2.0
   gMouseInside = false      # 鼠标是否在窗口内
@@ -556,6 +557,12 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
     result = 0
   of WM_TIMER:
     # ---- 动画帧 ----
+    # 0. 实测帧间隔（时间驱动）：SetTimer 与主循环 sleep 各自 16ms，但两者相位会漂移，
+    #    若仍按「每帧固定步进」推进，速度就时快时慢 → 视觉抖动。改为按真实 dt 推进。
+    let nowTick = int64(GetTickCount64())
+    var dt = float(nowTick - gLastAnimTick) / 1000.0
+    gLastAnimTick = nowTick
+    if dt <= 0.0 or dt > 0.25: dt = 0.016    # 首帧 / 异常（如休眠唤醒）保护
     # 1. 更新鲸鱼目标位置
     let cx = FLOAT_W / 2.0
     let cy = FLOAT_H / 2.0
@@ -572,17 +579,17 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
         targetX = gMouseX
         targetY = gMouseY
     else:
-      # 默认小幅绕圈游动（2026-09-28 主定：原 120px 圈太大显得晃眼、完全静止又太呆
-      # → 半径改 gFloatOrbitR=40，保留"活着"的感觉）。吐泡泡、鼠标接近游向鼠标、
-      # 拖动等其余动画保持不变。
-      gFloatAngle += 0.015
+      # 默认小幅绕圈游动（2026-09-28 主定：横向 50 / 纵向 25）。吐泡泡、鼠标接近
+      # 游向鼠标、拖动等其余动画保持不变。
+      gFloatAngle += 0.94 * dt                # 弧度/秒（原 0.015/帧 × 62.5fps ≈ 0.94）
       if gFloatAngle > 6.283185307:
         gFloatAngle = 0.0
       targetX = cx + gFloatOrbitR * cos(gFloatAngle)
       targetY = cy + gFloatOrbitR * 0.5 * sin(gFloatAngle)   # 纵向 25px（主定 50/25）
-    # 2. 平滑移动鲸鱼
-    gFishX += (targetX - gFishX) * 0.045
-    gFishY += (targetY - gFishY) * 0.045
+    # 2. 平滑移动鲸鱼（按实际帧间隔推进，帧率波动不影响观感）
+    let k = 1.0 - exp(-2.9 * dt)              # 原每帧 4.5% ≈ λ2.9/s，保持同等手感
+    gFishX += (targetX - gFishX) * k
+    gFishY += (targetY - gFishY) * k
     # 3. 吐泡泡（每约 500ms 一个）
     inc gBubbleTimer
     if gBubbleTimer >= 10:
@@ -614,8 +621,8 @@ proc floatPaint(hwnd: HWND) =
   #    即蓝↔橙/绿 或 黑↔橙/绿 交替（2026-08-16 定稿橙；2026-08-21 同法加绿、基态色交换）
   if gFishPixelsLoaded:
     let drawColor = if gPetColor >= 2 and not gPetBlinkOn: gPetBaseColor else: gPetColor
-    let fx = int(gFishX) - FISH_BIN_W div 2
-    let fy = int(gFishY) - FISH_BIN_H div 2
+    let fx = int(gFishX + 0.5) - FISH_BIN_W div 2   # 四舍五入（原截断会放大亚像素抖动）
+    let fy = int(gFishY + 0.5) - FISH_BIN_H div 2
     for wy in 0 ..< FISH_BIN_H:
       let ty = fy + wy
       if ty < 0 or ty >= FLOAT_H: continue
