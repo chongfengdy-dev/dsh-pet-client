@@ -71,8 +71,9 @@ if [ -d "$GLOBAL/node_modules/@deepseek-ai/dsh-workspace" ]; then
 fi
 # 3.2 会话日志文件名（terminal-server / ask-pending.py 依赖）
 if [ -d "$GLOBAL/node_modules/@deepseek-ai/dsh-session-format-v2-to-v3" ]; then
-  echo "  ℹ️ 当前会话格式链含 v2→v3；若日志文件名再变（现为 session.v3.jsonl.zstd），"
-  echo "     需同步 terminal-server/server.js 与 ask-pending.py 的候选名列表"
+  echo "  ℹ️ 会话日志文件名历次变更：session.jsonl.zstd → v3（0.1.5）→ v4（0.1.7）。"
+  echo "     现已支持 v4/v3/旧名三种；若再改名，需同步以下候选名列表："
+  echo "     terminal-server/server.js、ask-pending.py、today-usage.py、dsh-wechat/lib/index.js"
 fi
 # 3.3 wechat profile 本地依赖滞后检查（2026-09-06 / 2026-09-10 两次踩坑）
 WP="$HOME/.dsh/profiles/wechat"

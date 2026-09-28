@@ -69,7 +69,10 @@ function hasPersistedSession(sessionId, cwd = process.cwd()) {
 	try {
 		const root = path.join(dshHome(), "sessions");
 		const dir = path.join(root, projectKey(cwd), encodeSegment(sessionId));
-		return fs.existsSync(path.join(dir, "session.jsonl.zstd")) ||
+		// 会话日志改名历史：session.jsonl(.zstd) → v3（0.1.5）→ v4（0.1.7）。
+		return fs.existsSync(path.join(dir, "session.v4.jsonl.zstd")) ||
+			fs.existsSync(path.join(dir, "session.v3.jsonl.zstd")) ||
+			fs.existsSync(path.join(dir, "session.jsonl.zstd")) ||
 			fs.existsSync(path.join(dir, "session.jsonl"));
 	} catch { return false; }
 }

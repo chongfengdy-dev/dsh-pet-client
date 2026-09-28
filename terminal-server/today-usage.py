@@ -21,10 +21,10 @@ def scan():
         if not os.path.isdir(sp):
             continue
         for sid in os.listdir(sp):
-            # 2026-09-10：dsh 0.1.5 起会话日志改名 session.v3.jsonl.zstd（旧名 session.jsonl.zstd），
-            # 两种名字都认（只认旧名会让今日用量恒为 0）。
+            # 会话日志改名历史：session.jsonl.zstd → v3（0.1.5）→ v4（0.1.7）。
+            # 2026-09-28：按新→旧顺序取第一个存在的（v4 是完整文件，含全部历史，不会漏算）。
             f = None
-            for _fn in ('session.v3.jsonl.zstd', 'session.jsonl.zstd'):
+            for _fn in ('session.v4.jsonl.zstd', 'session.v3.jsonl.zstd', 'session.jsonl.zstd'):
                 _p = os.path.join(sp, sid, _fn)
                 if os.path.isfile(_p):
                     f = _p

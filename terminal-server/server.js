@@ -190,7 +190,9 @@ const WORKSPACE_STATE_FILE = path.join(os.homedir(), '.dsh', 'storages', 'worksp
 // 删除挂起清单：记录"目录已删、但归档墓碑还没结算"的会话。
 // 前端读它做即时过滤；dsh-archive-sync 在 dsh 下次启动时结算并清空。
 const PENDING_DELETES_FILE = path.join(os.homedir(), '.dsh', 'storages', 'dsh-pending-deletes.json');
-const SESSION_ID_RE = /^session-[a-zA-Z0-9_-]{1,64}$/;
+// 2026-09-28：会话目录历史上有两种命名 —— 旧式 `session-<id>` 与新式纯 `<uuid>`。
+// 原正则写死 `^session-` 前缀，把归档列表里的纯 UUID 判为非法（返回 400）→ 删除/恢复全部失败。
+const SESSION_ID_RE = /^(session-)?[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 function normalizeSessionId(sessionId) {
   if (typeof sessionId !== 'string' || !SESSION_ID_RE.test(sessionId)) return null;
   return sessionId;
@@ -211,12 +213,19 @@ function addPendingDelete(sessionId) {
 function findSessionDir(fullId) {
   let entries = [];
   try { entries = fs.readdirSync(SESSIONS_ROOT, { withFileTypes: true }); } catch (e) { return null; }
+  // 2026-09-28：兼容两种历史命名（旧式 session-<id> / 新式纯 <uuid>），
+  // 传进来的 id 无论带不带前缀，都能命中磁盘上的真实目录。
+  const names = fullId.startsWith('session-')
+    ? [fullId, fullId.slice('session-'.length)]
+    : [fullId, 'session-' + fullId];
   for (const ws of entries) {
     if (!ws.isDirectory()) continue;
-    const target = path.join(SESSIONS_ROOT, ws.name, fullId);
-    try {
-      if (fs.statSync(target).isDirectory()) return target;
-    } catch (e) { /* 继续找 */ }
+    for (const name of names) {
+      const target = path.join(SESSIONS_ROOT, ws.name, name);
+      try {
+        if (fs.statSync(target).isDirectory()) return target;
+      } catch (e) { /* 继续找 */ }
+    }
   }
   return null;
 }
@@ -228,7 +237,28 @@ app.post('/api/session-delete', (req, res) => {
   const fullId = normalizeSessionId(req.body && req.body.sessionId);
   if (!fullId) return res.status(400).json({ error: 'invalid session id' });
   const target = findSessionDir(fullId);
-  if (!target) return res.status(404).json({ error: 'session not found' });
+  if (!target) {
+    // 2026-09-28：目录已不存在（历史删除残留的孤儿归档项）→ 视为「已删除」幂等成功：
+    // 从归档集合里摘掉它并记入 pending，而不是回 404 让前端报「删除失败」。
+    try {
+      const raw = fs.readFileSync(WORKSPACE_STATE_FILE, 'utf8');
+      const state = JSON.parse(raw);
+      let changed = false;
+      const arr = state.global && state.global.archivedSessionIds;
+      if (Array.isArray(arr) && arr.includes(fullId)) {
+        state.global.archivedSessionIds = arr.filter((x) => x !== fullId);
+        changed = true;
+      }
+      if (changed) {
+        const tmp = WORKSPACE_STATE_FILE + '.tmp';
+        fs.writeFileSync(tmp, JSON.stringify(state, null, 2), 'utf8');
+        fs.renameSync(tmp, WORKSPACE_STATE_FILE);
+      }
+    } catch (e) { console.log('[session-delete] orphan cleanup failed:', e.message); }
+    try { addPendingDelete(fullId); } catch (e) {}
+    console.log('[session-delete] orphan purged (dir missing)', fullId);
+    return res.json({ ok: true, note: 'already gone' });
+  }
   const rootReal = path.resolve(SESSIONS_ROOT);
   const targetReal = path.resolve(target);
   if (!targetReal.startsWith(rootReal + path.sep)) {
@@ -386,9 +416,9 @@ function latestSessionMtime() {
       const sp = path.join(root, scope);
       if (!fs.statSync(sp).isDirectory()) continue;
       for (const sid of fs.readdirSync(sp)) {
-        // 2026-09-10：dsh 0.1.5 起会话日志改名 session.v3.jsonl.zstd（旧名 session.jsonl.zstd）。
-        // 两个名字都试；将来再改名（v4…）在这里加候选即可。
-        for (const name of ['session.v3.jsonl.zstd', 'session.jsonl.zstd']) {
+        // 会话日志改名历史：session.jsonl.zstd → session.v3.jsonl.zstd（0.1.5）→ session.v4.jsonl.zstd（0.1.7）。
+        // 2026-09-28：dsh 0.1.7 起新会话写 v4（v4 是完整文件，非增量），旧会话仍只有 v3，故按新→旧顺序探测。
+        for (const name of ['session.v4.jsonl.zstd', 'session.v3.jsonl.zstd', 'session.jsonl.zstd']) {
           const f = path.join(sp, sid, name);
           try { const mt = fs.statSync(f).mtimeMs; if (mt > best) best = mt; } catch (e) {}
         }
@@ -481,7 +511,18 @@ function refreshDshVersion() {
   const finish = (latest) => {
     dshVerCache = { at: Date.now(), data: { local, latest, hasUpdate: !!(local && latest && local !== latest) } };
   };
-  const req = https.request({ host: 'registry.npmjs.org', path: '/@deepseek-ai/dsh/latest', method: 'GET', timeout: 8000 }, (resp) => {
+  // registry 动态读取（~/.npmrc），不写死 npmjs.org —— 国内直连常超时导致 latest 恒为 null
+  let reg = 'https://registry.npmjs.org';
+  try {
+    const m = fs.readFileSync(path.join(os.homedir(), '.npmrc'), 'utf8').match(/^\s*registry\s*=\s*(\S+)/m);
+    if (m) reg = m[1].replace(/\/+$/, '');
+  } catch (e) {}
+  let u;
+  try {
+    u = new URL(reg + '/@deepseek-ai/dsh/latest');
+    if (u.protocol !== 'https:') u = new URL('https://registry.npmjs.org/@deepseek-ai/dsh/latest');
+  } catch (e) { return finish(null); }
+  const req = https.request({ host: u.hostname, path: u.pathname, method: 'GET', timeout: 8000 }, (resp) => {
     let body = '';
     resp.on('data', (c) => { body += c; });
     resp.on('end', () => {
@@ -503,7 +544,13 @@ app.post('/api/dsh-update', (req, res) => {
   // 演示模式：跳过真实安装，直接返回成功（2026-08-19 要求：演示流程不真更新）
   if (DEMO_MODE) return res.json({ ok: true, local: '0.1.0-rc.9-demo', restarted: false });
   const { execFile } = require('child_process');
-  execFile('/usr/bin/npm', ['install', '-g', '@deepseek-ai/dsh', '--cache', '/tmp/npm-cache-dsh-update'], { timeout: 180000 }, (err, stdout, stderr) => {
+  // npm 动态定位：优先取 node 同目录（官方分发包），否则交给 PATH。
+  // 不写死 /usr/bin/npm —— 不同发行版/安装方式的 npm 位置不同（deepin 在 /usr/local/bin）。
+  const NPM_BIN = (() => {
+    const beside = path.join(path.dirname(process.execPath), 'npm');
+    return fs.existsSync(beside) ? beside : 'npm';
+  })();
+  execFile(NPM_BIN, ['install', '-g', '@deepseek-ai/dsh', '--cache', '/tmp/npm-cache-dsh-update'], { timeout: 180000 }, (err, stdout, stderr) => {
     if (err) return res.status(500).json({ ok: false, error: String(stderr || stdout || err).slice(0, 400) });
     dshVerCache = { at: 0, data: null };  // 清缓存，下次重新读新版本
     execFile('sudo', ['-n', 'systemctl', 'restart', 'dsh-web'], { timeout: 30000 }, (err2) => {

@@ -1389,32 +1389,80 @@ window.__ModuleLoader__.load({
 				})
 				.catch(() => {});
 
-			// 挂载：插到设置按钮上方（footArea 内 settingsArea 之前）
+			// 挂载锚点：侧边栏底部的「设置」条目
+			// 2026-09-28：dsh 0.1.7 起该条目**不是 <button>**（实测为 div/span + 点击事件），
+			// 只查 button / role=button 永远找不到它 → 归档面板静默不挂载（连续踩三次）。
+			// 现改为：遍历任意标签，用「文本/aria-label ≈ 设置」+「位于左半屏且可见」过滤，
+			// 取最靠下的那个（即侧边栏底部的设置条目）。
 			function findSettingsBtn() {
-				const btns = document.querySelectorAll("button");
-				for (const b of btns) {
-					const aria = (b.getAttribute("aria-label") || "").trim();
-					const txt = (b.textContent || "").trim();
-					const title = (b.getAttribute("title") || "").trim();
-					if (aria === "设置" || aria === "Settings" || txt === "设置" || txt === "Settings" || title === "设置" || title === "Settings") return b;
+				const norm = (s) => (s || "").trim();
+				// 允许「⚙ 设置」这类带图标前缀的短文案
+				const isSettings = (s) => {
+					const t = norm(s);
+					if (!t || t.length > 10) return false;
+					return /^(设置|settings?|偏好设置|preferences?)$/i.test(t) || /设置|settings?/i.test(t);
+				};
+				const cands = document.querySelectorAll('button, [role="button"], a, li, div, span');
+				let best = null, bestY = -1;
+				const halfW = (window.innerWidth || 1200) * 0.45;
+				for (const el of cands) {
+					const aria = norm(el.getAttribute("aria-label"));
+					const text = norm(el.textContent);
+					if (!isSettings(aria) && !isSettings(text)) continue;
+					const r = el.getBoundingClientRect();
+					if (r.width < 4 || r.height < 4) continue;      // 不可见
+					if (r.left > halfW) continue;                   // 必须在左侧（侧边栏内）
+					if (r.top > bestY) { bestY = r.top; best = el; } // 取最靠下的
 				}
-				return null;
+				return best;
 			}
 			function mount() {
 				if (root.isConnected) return true;
+				// 2026-09-28：dsh 0.1.7 侧边栏改版后，容器层级在不同版本/布局下差异很大，
+				// 「猜 DOM 层级」连续三次都插错位置（落到整页底部、横跨全宽，主截图确认）。
+				// 改为**坐标定位**：直接测量「设置」按钮的屏幕位置，把面板以 position:fixed
+				// 浮到它正上方——不依赖任何祖先容器，视觉位置必然正确。
+				// ⚠️ 铁律：本函数**绝不 remove 已插入节点**（会与下面的 MutationObserver
+				// 形成「移除→观察→重挂→移除」死循环，把前端卡在「加载插件」页）。
 				const btn = findSettingsBtn();
 				if (!btn) return false;
-				const settingsArea = btn.closest("div");
-				const footArea = settingsArea ? settingsArea.parentElement : null;
-				if (!footArea) return false;
-				footArea.insertBefore(root, settingsArea);
-				// 侧边栏折叠成 rail（窄条）时隐藏区块
-				const sidebarRoot = footArea.parentElement;
-				const applyWidth = () => {
-					root.style.display = (sidebarRoot && sidebarRoot.offsetWidth > 80) ? "" : "none";
+				if (root.parentElement !== document.body) document.body.appendChild(root);
+				root.style.position = "fixed";
+				root.style.zIndex = "900";
+				const place = () => {
+					const r = btn.getBoundingClientRect();
+					// 设置条目不可见（侧边栏折叠成 rail / 未渲染）时隐藏面板
+					if (!r || r.width < 4 || r.height < 4 || r.top < 0) { root.style.display = "none"; return; }
+					root.style.display = "";
+					// 宽度与左边界参考：优先「设置」同一行的容器（settingsArea → footArea → 父级），
+					// 这样面板宽度与设置条目一致；都拿不到才退回设置条目自身（那样只剩文字宽度）。
+					const halfW = (window.innerWidth || 1200) * 0.45;
+					let box = null;
+					const refCands = [
+						document.querySelector('[class*="settingsArea"]'),
+						document.querySelector('[class*="footArea"]'),
+						btn.parentElement,
+						btn.parentElement && btn.parentElement.parentElement
+					];
+					for (const c of refCands) {
+						if (!c) continue;
+						const cr = c.getBoundingClientRect();
+						if (cr.width > 100 && cr.height > 4 && cr.left < halfW) { box = cr; break; }
+					}
+					if (!box) box = r;
+					root.style.left = Math.round(box.left) + "px";
+					root.style.width = Math.round(box.width) + "px";
+					root.style.bottom = Math.round(window.innerHeight - r.top + 6) + "px";
+					root.style.maxHeight = Math.max(140, Math.round(r.top) - 80) + "px";
+					root.style.overflow = "auto";
 				};
-				applyWidth();
-				if (sidebarRoot) { try { new ResizeObserver(applyWidth).observe(sidebarRoot); } catch (e) {} }
+				place();
+				if (!mount.listening) {
+					mount.listening = true;
+					try { window.addEventListener("resize", place); } catch (e) {}
+					// 侧边栏折叠/窗口布局变化时跟随（1s 一次，开销可忽略）
+					try { setInterval(place, 1000); } catch (e) {}
+				}
 				return true;
 			}
 			// 兜底：React 重渲染可能移除区块，观察并重插

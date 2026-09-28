@@ -23,8 +23,9 @@ def latest_session_file():
         if not os.path.isdir(sp):
             continue
         for sid in os.listdir(sp):
-            # 2026-09-10：dsh 0.1.5 起日志改名 session.v3.jsonl.zstd；两种名字都认。
-            for fn in ('session.v3.jsonl.zstd', 'session.jsonl.zstd'):
+            # 会话日志改名历史：session.jsonl.zstd → v3（0.1.5）→ v4（0.1.7）。
+            # 2026-09-28：三种名字都认，按新→旧顺序取 mtime 最新者。
+            for fn in ('session.v4.jsonl.zstd', 'session.v3.jsonl.zstd', 'session.jsonl.zstd'):
                 f = os.path.join(sp, sid, fn)
                 if not os.path.isfile(f):
                     continue
