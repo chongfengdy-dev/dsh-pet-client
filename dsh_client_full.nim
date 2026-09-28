@@ -357,7 +357,7 @@ proc createHostWindow(): HWND =
 
 # ========== 桌面悬浮鲸鱼图标（v8：无圆，整窗透明，鲸鱼在放置位置周边游动） ==========
 # 2026-08-15 新方案：不做圆形背景。窗口全透明，蓝白鲸鱼以窗口中心
-# （= 图标放置位置）为原点，在 FLOAT_AREA(150px) 半径内绕圈游动。
+# （= 图标放置位置）为原点，在 gFloatOrbitR(40px) 的小范围内绕圈游动。
 # 可拖动；点击切换主窗口 弹出/最小化
 
 const
@@ -387,6 +387,8 @@ var
   gFloatDragStart: POINT
   gFloatWinStart: POINT
   gFloatClicked = false
+  gFloatAngle = 0.0         # 鲸鱼游动角度（小幅绕圈）
+  gFloatOrbitR = 40.0       # 绕圈轨道半径：2026-09-28 由 120 改小（原圈太大显得晃眼，全静止又太呆）
   gFishX = FLOAT_W / 2.0    # 鲸鱼当前位置（窗口内，初始=放置位置）
   gFishY = FLOAT_H / 2.0
   gMouseInside = false      # 鼠标是否在窗口内
@@ -569,10 +571,14 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
         targetX = gMouseX
         targetY = gMouseY
     else:
-      # 2026-09-28 主定：默认**静止**（原为绕圈游动，主反馈「画圈的游动碍眼」）。
-      # 吐泡泡、鼠标接近游向鼠标、拖动等其余动画保持不变。
-      targetX = gFishX
-      targetY = gFishY
+      # 默认小幅绕圈游动（2026-09-28 主定：原 120px 圈太大显得晃眼、完全静止又太呆
+      # → 半径改 gFloatOrbitR=40，保留"活着"的感觉）。吐泡泡、鼠标接近游向鼠标、
+      # 拖动等其余动画保持不变。
+      gFloatAngle += 0.015
+      if gFloatAngle > 6.283185307:
+        gFloatAngle = 0.0
+      targetX = cx + gFloatOrbitR * cos(gFloatAngle)
+      targetY = cy + gFloatOrbitR * 0.6 * sin(gFloatAngle)
     # 2. 平滑移动鲸鱼
     gFishX += (targetX - gFishX) * 0.045
     gFishY += (targetY - gFishY) * 0.045
