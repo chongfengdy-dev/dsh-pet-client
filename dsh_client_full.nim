@@ -388,7 +388,7 @@ var
   gFloatWinStart: POINT
   gFloatClicked = false
   gFloatAngle = 0.0         # 鲸鱼游动角度（小幅绕圈）
-  gFloatOrbitR = 40.0       # 绕圈轨道半径：2026-09-28 由 120 改小（原圈太大显得晃眼，全静止又太呆）
+  gFloatOrbitR = 50.0       # 绕圈轨道**横向**半径（纵向取 0.5 → 25px）：2026-09-28 主定 120→50
   gFishX = FLOAT_W / 2.0    # 鲸鱼当前位置（窗口内，初始=放置位置）
   gFishY = FLOAT_H / 2.0
   gMouseInside = false      # 鼠标是否在窗口内
@@ -467,7 +467,8 @@ proc floatSpawnBubble() =
   for i in 0 ..< MAX_BUBBLES:
     if not gBubbles[i].active:
       gBubbles[i].active = true
-      gBubbles[i].x = gFishX + float(rand(14) - 7)
+      # 起点从图标中心**左移 1/4 图标宽**（2026-09-28 主定：原先从正中冒出，看着像在流泪）
+      gBubbles[i].x = gFishX - float(FISH_BIN_W div 4) + float(rand(14) - 7)
       gBubbles[i].y = gFishY + float(rand(8) - 4)
       gBubbles[i].r = 2.0 + float(rand(5)) / 2.0
       gBubbles[i].speed = 0.8 + float(rand(5)) / 3.0
@@ -578,7 +579,7 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
       if gFloatAngle > 6.283185307:
         gFloatAngle = 0.0
       targetX = cx + gFloatOrbitR * cos(gFloatAngle)
-      targetY = cy + gFloatOrbitR * 0.6 * sin(gFloatAngle)
+      targetY = cy + gFloatOrbitR * 0.5 * sin(gFloatAngle)   # 纵向 25px（主定 50/25）
     # 2. 平滑移动鲸鱼
     gFishX += (targetX - gFishX) * 0.045
     gFishY += (targetY - gFishY) * 0.045
@@ -703,10 +704,11 @@ proc floatInit() =
     dbg("floatInitDib bits=" & $(gDibBits != nil))
     floatLoadFishBins()
     dbg("floatLoadFishBins loaded=" & $gFishPixelsLoaded)
-    # 初始化位置：屏幕右上角
+    # 初始化位置：屏幕**右下角**（2026-09-28 主定：原右上角会挡住 Token HUB）
     let sw = GetSystemMetrics(SM_CXSCREEN)
+    let sh = GetSystemMetrics(SM_CYSCREEN)
     discard SetWindowPos(gFloatHwnd, HWND_TOPMOST,
-                         sw - FLOAT_W - 40, 80, 0, 0,
+                         sw - FLOAT_W - 40, sh - FLOAT_H - 80, 0, 0,
                          SWP_NOSIZE)
     # 初始化鲸鱼位置在圆心
     gFishX = FLOAT_W / 2.0
