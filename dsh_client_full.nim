@@ -581,7 +581,7 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
     else:
       # 默认小幅绕圈游动（2026-09-28 主定：横向 50 / 纵向 25）。吐泡泡、鼠标接近
       # 游向鼠标、拖动等其余动画保持不变。
-      gFloatAngle += 0.94 * dt                # 弧度/秒（原 0.015/帧 × 62.5fps ≈ 0.94）
+      gFloatAngle += 0.3927 * dt              # 弧度/秒；2026-09-28 主定一圈 16 秒（2π/16 ≈ 0.3927）
       if gFloatAngle > 6.283185307:
         gFloatAngle = 0.0
       targetX = cx + gFloatOrbitR * cos(gFloatAngle)
