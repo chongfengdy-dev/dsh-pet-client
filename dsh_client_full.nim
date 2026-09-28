@@ -587,7 +587,8 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
       targetX = cx + gFloatOrbitR * cos(gFloatAngle)
       targetY = cy + gFloatOrbitR * 0.5 * sin(gFloatAngle)   # 纵向 25px（主定 50/25）
     # 2. 平滑移动鲸鱼（按实际帧间隔推进，帧率波动不影响观感）
-    let k = 1.0 - exp(-2.9 * dt)              # 原每帧 4.5% ≈ λ2.9/s，保持同等手感
+    let k = 1.0 - exp(-8.0 * dt)              # 2026-09-28 主定：λ 2.9→8.0（时间常数 0.34s→0.13s），
+                                              # 跟得更紧 → 轨迹更贴近理想圆周、观感更稳
     gFishX += (targetX - gFishX) * k
     gFishY += (targetY - gFishY) * k
     # 3. 吐泡泡（每约 500ms 一个）
