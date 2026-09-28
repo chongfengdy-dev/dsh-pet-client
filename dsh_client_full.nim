@@ -480,7 +480,7 @@ proc floatUpdateBubbles(dt: float) =
   for i in 0 ..< MAX_BUBBLES:
     if gBubbles[i].active:
       gBubbles[i].y -= gBubbles[i].speed * dt * 60.0   # speed 以「60fps 帧速」为基准 → 换算秒速
-      gBubbles[i].life -= dt / 0.5                     # 寿命 500ms（主定）
+      gBubbles[i].life -= dt / 0.6                     # 寿命 600ms（主定）
       if gBubbles[i].life <= 0:
         gBubbles[i].active = false
 
@@ -589,10 +589,10 @@ proc floatWndProc(hwnd: HWND, msg: UINT, wParam: WPARAM, lParam: LPARAM): LRESUL
     let k = 1.0 - exp(-5.0 * dt)              # 2026-09-28 主定 λ=5.0（时间常数 0.2s；8.0 略紧、5.0 更柔和）
     gFishX += (targetX - gFishX) * k
     gFishY += (targetY - gFishY) * k
-    # 3. 吐泡泡（2026-09-28 改事件/时间驱动：每 500ms 一个，与帧率无关）
+    # 3. 吐泡泡（2026-09-28 改事件/时间驱动：每 300ms 一个，与帧率无关）
     gBubbleAccum += dt
-    if gBubbleAccum >= 0.5:
-      gBubbleAccum -= 0.5
+    if gBubbleAccum >= 0.3:
+      gBubbleAccum -= 0.3
       floatSpawnBubble()
     floatUpdateBubbles(dt)
     # 4. 重绘（v7: UpdateLayeredWindow 不能从 WM_PAINT 调用，故在定时器里直接渲染）
