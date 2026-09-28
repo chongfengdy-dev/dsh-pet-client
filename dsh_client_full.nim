@@ -480,7 +480,7 @@ proc floatUpdateBubbles(dt: float) =
   for i in 0 ..< MAX_BUBBLES:
     if gBubbles[i].active:
       gBubbles[i].y -= gBubbles[i].speed * dt * 60.0   # speed 以「60fps 帧速」为基准 → 换算秒速
-      gBubbles[i].life -= dt / 0.2                     # 寿命 200ms（主定）
+      gBubbles[i].life -= dt / 0.5                     # 寿命 500ms（主定）
       if gBubbles[i].life <= 0:
         gBubbles[i].active = false
 
