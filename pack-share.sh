@@ -50,9 +50,15 @@ echo "[3/5] 复制 Windows 侧产物"
 mkdir -p "$PKG/DSH-Pet-Client"
 cp "$EXE" "$PKG/DSH-Pet-Client/dsh_client_full.exe"
 EXEDIR="$(cd "$(dirname "$EXE")" && pwd)"
-for dll in "$EXEDIR"/*.dll; do
-  [ -e "$dll" ] && cp "$dll" "$PKG/DSH-Pet-Client/"
-done
+# 2026-10-06：exe 已改为 MinGW 静态链接（编译时加 --passL:-static），
+# PE 导入表核验只剩系统 DLL（KERNEL32 / USER32 / api-ms-win-crt-*），
+# 历史上随包分发的 libstdc++-6 / libgcc_s_seh-1 / libwinpthread-1 经查全为冗余
+# （旧 exe 的导入表同样不含它们），故不再复制任何 DLL。
+# 若将来改回动态链接构建，请恢复下面的复制逻辑。
+# for dll in "$EXEDIR"/*.dll; do
+#   [ -e "$dll" ] && cp "$dll" "$PKG/DSH-Pet-Client/"
+# done
+echo "    (跳过 DLL：静态链接版零第三方依赖，2026-10-06 核验)"
 if [ -d "$EXEDIR/assets" ]; then cp -r "$EXEDIR/assets" "$PKG/DSH-Pet-Client/"; fi
 if [ -f "$ROOT/使用说明.md" ]; then cp "$ROOT/使用说明.md" "$PKG/DSH-Pet-Client/使用说明.md"; fi
 

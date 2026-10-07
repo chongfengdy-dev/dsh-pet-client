@@ -13,8 +13,16 @@ proc timeEndPeriod(uPeriod: uint32): uint32 {.stdcall, dynlib: "winmm.dll", impo
 
 # 调试日志（写到 exe 同目录，随程序移动；正常使用无感）
 proc dbg(msg: string) =
+  ## 2026-10-07：加 256KB 上限——状态变化每次都会写一行，长期运行会无限增长；
+  ## 超过上限就清空重来（这是排查用的临时日志，不需要历史累积）。
+  let p = getAppDir() & "\\dsh-client-debug.log"
+  try:
+    if fileExists(p) and getFileSize(p) > 256 * 1024:
+      writeFile(p, "")
+  except CatchableError:
+    discard
   var f: File
-  if open(f, getAppDir() & "\\dsh-client-debug.log", fmAppend):
+  if open(f, p, fmAppend):
     f.writeLine(msg)
     close(f)
 
@@ -40,15 +48,20 @@ const
 # 用法：把 dsh web 启动时打印的完整 URL（含 ?token=，或只存 token 本身）
 # 写入 exe 同目录 dsh-web-token.txt 后启动客户端。
 proc launchToken(): string =
-  let p = getAppDir() & "\\" & WebTokenFile
-  try:
-    if fileExists(p):
-      let raw = strip(readFile(p))
-      if raw.len > 0:
-        let i = raw.find("?token=")
-        result = if i >= 0: raw[(i + 7)..^1] else: raw
-  except CatchableError:
-    discard
+  ## 读认证引导 token。2026-10-07 主：token 文件统一到 <用户目录>\.dsh\dsh-web-token.txt
+  ## （插件 dsh-web-token-sync 同批改动）；exe 同目录的旧位置保留为回退，兼容老分发包。
+  let candidates = [getEnv("USERPROFILE") & "\\.dsh\\" & WebTokenFile,
+                    getAppDir() & "\\" & WebTokenFile]
+  for p in candidates:
+    try:
+      if fileExists(p):
+        let raw = strip(readFile(p))
+        if raw.len > 0:
+          let i = raw.find("?token=")
+          return (if i >= 0: raw[(i + 7)..^1] else: raw)
+    except CatchableError:
+      discard
+  return ""
 
 proc bootUrl(): string =
   ## 认证引导 URL：token 文件有效时带 token，否则回落干净 WebUrl
@@ -69,13 +82,36 @@ var gHostHwnd: HWND         # 托盘宿主窗口（宠物右键菜单 owner，�
 # ---------- 托盘 ----------
 
 proc loadWhaleIcon(size: int32, color: int = 0): HICON =
-  ## 加载鲸鱼图标（0=蓝 1=黑 2=橙 3=绿；用提供的 deepseek-color-* 生成的四色 ico）
+  ## 加载鲸鱼图标（0=蓝 1=黑 2=橙 3=绿）。
+  ## 2026-10-07 主：改为**编译期嵌入**（staticRead）——发布只需单个 exe，不再依赖 assets 目录。
+  ## 嵌入数据解析失败时回退「同目录 assets\\*.ico」，保证任何时候都有图标。
+  const icoData = [staticRead("assets/fish_blue.ico"),
+                   staticRead("assets/fish_black.ico"),
+                   staticRead("assets/fish_orange.ico"),
+                   staticRead("assets/fish_green.ico")]
   const icoFiles = ["assets\\fish_blue.ico", "assets\\fish_black.ico",
                     "assets\\fish_orange.ico", "assets\\fish_green.ico"]
   let idx = if color >= 0 and color <= 3: color else: 0
-  let icoPath = getAppDir() & "\\" & icoFiles[idx]
-  result = LoadImageW(0, icoPath.cstring, IMAGE_ICON, size, size,
-                      LR_LOADFROMFILE).HICON
+  let sz = if size > 0: size else: 32'i32
+  # ① 从嵌入的 .ico 字节中取第一幅图像数据 → CreateIconFromResourceEx
+  #    注意 winim 的 DWORD/UINT/WINBOOL 都是 int32，故全程用 int32 以免类型不匹配。
+  let d = icoData[idx]
+  if d.len >= 22:
+    let count = int32(uint8(d[4])) or (int32(uint8(d[5])) shl 8)
+    if count > 0:
+      let bytesInRes = int32(uint8(d[14])) or (int32(uint8(d[15])) shl 8) or
+                       (int32(uint8(d[16])) shl 16) or (int32(uint8(d[17])) shl 24)
+      let off = int32(uint8(d[18])) or (int32(uint8(d[19])) shl 8) or
+                (int32(uint8(d[20])) shl 16) or (int32(uint8(d[21])) shl 24)
+      if bytesInRes > 0 and off + bytesInRes <= d.len:
+        result = CreateIconFromResourceEx(cast[PBYTE](unsafeAddr d[int(off)]),
+                                          DWORD(bytesInRes), WINBOOL(1), DWORD(0x00030000),
+                                          sz, sz, UINT(LR_DEFAULTCOLOR)).HICON
+  # ② 回退：同目录 assets 文件
+  if result == 0:
+    let icoPath = getAppDir() & "\\" & icoFiles[idx]
+    result = LoadImageW(0, icoPath.cstring, IMAGE_ICON, sz, sz,
+                        LR_LOADFROMFILE).HICON
 
 proc setupTray(hwnd: HWND) =
   zeroMem(gTrayData.addr, sizeof(gTrayData))
@@ -160,11 +196,7 @@ proc showTrayMenu(hwnd: HWND) =
   # v2.2：去掉「打开 DSH」菜单项（呼出/最小化走托盘左键与鲸鱼单击，菜单只留切换/宠物/退出）
   discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_FULL, toW("切换：完整模式（复制指令）"))
   discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_CLEAN, toW("切换：纯净模式（复制指令）"))
-  discard AppendMenuW(hMenu, MF_SEPARATOR, 0, nil)
-  if gPetVisible:
-    discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_PET, toW("隐藏宠物"))
-  else:
-    discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_PET, toW("显示宠物"))
+  # 2026-10-07 主：悬浮宠物已去掉，菜单不再提供「显示/隐藏宠物」项
   discard AppendMenuW(hMenu, MF_SEPARATOR, 0, nil)
   discard AppendMenuW(hMenu, MF_STRING, ID_TRAY_EXIT, toW("退出"))
   var pt: POINT
@@ -702,9 +734,12 @@ proc floatCreateWindow(): HWND =
     0, 0, hInstance, nil)
 
 proc floatInit() =
-  gFloatHwnd = floatCreateWindow()
-  dbg("floatCreateWindow hwnd=" & $gFloatHwnd)
-  if gFloatHwnd != 0:
+  ## 2026-10-07 主：去掉悬浮宠物——与托盘状态灯功能重复，且遮挡桌面碍事。
+  ## 只保留托盘图标 + 菜单；浮窗相关代码保留但不再创建窗口（便于日后恢复）。
+  gFloatHwnd = 0
+  dbg("pet window disabled by user request")
+  echo "[DSH-Nim] 悬浮宠物已禁用（仅托盘模式）"
+  if false:
     # v7: 像素级渲染（UpdateLayeredWindow），不再用品红色键
     floatInitDib()
     dbg("floatInitDib bits=" & $(gDibBits != nil))
@@ -836,8 +871,8 @@ when isMainModule:
       dbg("single-instance activate -> toggle dsh app")
       toggleDshApp()
 
-    # 鼠标交互：鲸鱼游向鼠标（GetCursorPos 轮询，透明穿透区也感知）
-    if not gFloatDragging:
+    # 鼠标交互：鲸鱼游向鼠标（浮窗已禁用时整段跳过，省 CPU）
+    if gFloatHwnd != 0 and not gFloatDragging:
       var mpt: POINT
       if GetCursorPos(mpt.addr):
         var wr: RECT

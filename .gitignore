@@ -25,3 +25,6 @@ terminal-server/backgrounds/
 # Python 缓存
 __pycache__/
 *.pyc
+
+# 临时备份文件（* .bak-<时间戳>），不入库
+*.bak-*

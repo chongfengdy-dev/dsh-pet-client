@@ -1,6 +1,8 @@
-// dsh-web-token-sync：dsh web 启动后自动把带 token 的认证 URL 写入 Windows 桌面
-// 客户端 token 文件（dsh-web-token.txt），让 pet client 每次启动读到最新 token，
-// 免手动维护。
+// dsh-web-token-sync：dsh web 启动后自动把带 token 的认证 URL 写入
+// <用户目录>/.dsh/dsh-web-token.txt，免手动维护。
+// 2026-10-07 主：统一收进 ~/.dsh（原先散落在桌面各客户端目录，既乱又与多版本副本耦合）。
+// WSL 下 <用户目录> 解析为 Windows 侧用户目录（/mnt/c/Users/<user>），
+// 原生 Linux/macOS 则用系统家目录 —— 两种环境同一份代码都能工作。
 //
 // 背景：dsh web 0.1.2-rc.1 起每次进程启动生成一次性 launch token（仅内存，
 // 打印在启动 URL）。客户端 WebView 首次需带 token 完成认证交换。
@@ -12,6 +14,7 @@
 
 import { mkdirSync, readdirSync, writeFileSync, statSync } from "node:fs";
 import path from "node:path";
+import os from "node:os";
 
 /** 稳定插件名（cordis loader 用） */
 export const name = "dsh-web-token-sync";
@@ -33,6 +36,14 @@ function winUserHome() {
   } catch {
     return null;
   }
+}
+
+/**
+ * 统一解析“用户目录”：WSL 下映射到 Windows 侧用户目录（让文件对 Windows 客户端可见），
+ * 原生 Linux/macOS 用系统家目录。token 文件固定放 <用户目录>/.dsh/dsh-web-token.txt。
+ */
+function userHome() {
+  return winUserHome() || os.homedir();
 }
 
 /**
@@ -69,13 +80,13 @@ function clientDirs(home) {
 export function apply(ctx, config) {
   const targetDir = config?.targetDir;
   try {
-    const home = winUserHome();
-    if (!home) throw new Error("未找到 /mnt/c/Users 下的 Windows 用户目录");
+    const home = userHome();
+    if (!home) throw new Error("无法解析用户目录");
     const port = ctx.webServer?.port;
     if (port === undefined) throw new Error("webServer.port 不可用");
     const authUrl = ctx.connection.authenticatedUrl(`http://127.0.0.1:${port}`);
-    // 目标目录：显式配置 > 探测到的运行目录列表 > 空（不自动 mkdir 新目录）
-    const dirs = targetDir ? [targetDir] : clientDirs(home);
+    // 目标目录：显式配置 > <用户目录>/.dsh（2026-10-07 定；不再散写桌面各客户端目录）
+    const dirs = targetDir ? [targetDir] : [path.join(home, ".dsh")];
     if (dirs.length === 0) {
       ctx.logger?.info?.("[dsh-web-token-sync] 未找到 DSH 客户端运行目录，跳过 token 写入");
       return;
